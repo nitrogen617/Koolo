@@ -471,7 +471,7 @@ func MoveTo(toFunc func() (data.Position, bool), options ...step.MoveOption) err
 					}
 					return filteredMonsters
 				})
-				_ = ClearAreaAroundPosition(ctx.Data.PlayerUnit.Position, clearPathDist, filters...)
+				_ = clearAreaAroundPosition(ctx.Data.PlayerUnit.Position, clearPathDist, false, filters...)
 				if !opts.IgnoreItems() {
 					// After clearing, immediately try to pick up items
 					lootErr := ItemPickup(lootAfterCombatRadius)

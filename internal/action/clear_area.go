@@ -62,16 +62,14 @@ func SortEnemiesByPriority(enemies *[]data.Monster) {
 }
 
 func ClearAreaAroundPosition(pos data.Position, radius int, filters ...data.MonsterFilter) error {
+	return clearAreaAroundPosition(pos, radius, true, filters...)
+}
+
+func clearAreaAroundPosition(pos data.Position, radius int, doPickup bool, filters ...data.MonsterFilter) error {
 	ctx := context.Get()
 	ctx.SetLastAction("ClearAreaAroundPosition")
 
-	// Disable item pickup at the beginning of the function
-	ctx.DisableItemPickup()
-
-	// Defer the re-enabling of item pickup to ensure it happens regardless of how the function exits
-	defer ctx.EnableItemPickup()
-
-	return ctx.Char.KillMonsterSequence(func(d game.Data) (data.UnitID, bool) {
+	err := ctx.Char.KillMonsterSequence(func(d game.Data) (data.UnitID, bool) {
 		enemies := d.Monsters.Enemies(filters...)
 
 		SortEnemiesByPriority(&enemies)
@@ -111,6 +109,17 @@ func ClearAreaAroundPosition(pos data.Position, radius int, filters ...data.Mons
 
 		return data.UnitID(0), false
 	}, nil)
+
+	if err != nil {
+		return err
+	}
+
+	if !doPickup || !ctx.CurrentGame.PickupItems || ctx.CurrentGame.IsPickingItems {
+		return nil
+	}
+
+	// Pick up items after clearing the area
+	return ItemPickup(30)
 }
 
 func ClearThroughPath(pos data.Position, radius int, filter data.MonsterFilter) error {
