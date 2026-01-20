@@ -55,22 +55,32 @@ document.addEventListener('DOMContentLoaded', function () {
     // Track original section values for "changed" indicators
     const initialSectionState = {
         health: '',
+        chicken: '',
         merc: '',
         runs: '',
         packet: '',
         cube: '',
         general: '',
+        backToTown: '',
+        beltLayout: '',
+        inventoryLock: '',
+        gambling: '',
         client: '',
         scheduler: '',
         // muling/shopping dirty checking not implemented yet, but placeholders can be added if needed
     };
     const sectionDirty = {
         health: false,
+        chicken: false,
         merc: false,
         runs: false,
         packet: false,
         cube: false,
         general: false,
+        backToTown: false,
+        beltLayout: false,
+        inventoryLock: false,
+        gambling: false,
         client: false,
         scheduler: false,
     };
@@ -87,12 +97,17 @@ document.addEventListener('DOMContentLoaded', function () {
     const levelingSupervisors = new Set();
     const SECTION_CHECKBOX_IDS = [
         'sectionHealth',
+        'sectionChickenOnCursesAuras',
         'sectionMerc',
         'sectionRuns',
         'sectionPacketCasting',
         'sectionCubeRecipes',
         'sectionRunewordMaker',
         'sectionGeneral',
+        'sectionBackToTown',
+        'sectionBeltLayout',
+        'sectionInventoryLock',
+        'sectionGambling',
         'sectionClient',
         'sectionScheduler',
         'sectionMuling',   // [Added]
@@ -182,6 +197,28 @@ document.addEventListener('DOMContentLoaded', function () {
         return JSON.stringify(state);
     }
 
+    function snapshotChickenState() {
+        const form = document.querySelector('form');
+        if (!form) {
+            return '';
+        }
+        const boolVal = (name) => !!form.querySelector(`input[name="${name}"]`)?.checked;
+        const state = {
+            chickenAmplifyDamage: boolVal('chickenAmplifyDamage'),
+            chickenDecrepify: boolVal('chickenDecrepify'),
+            chickenLowerResist: boolVal('chickenLowerResist'),
+            chickenBloodMana: boolVal('chickenBloodMana'),
+            chickenFanaticism: boolVal('chickenFanaticism'),
+            chickenMight: boolVal('chickenMight'),
+            chickenConviction: boolVal('chickenConviction'),
+            chickenHolyFire: boolVal('chickenHolyFire'),
+            chickenBlessedAim: boolVal('chickenBlessedAim'),
+            chickenHolyFreeze: boolVal('chickenHolyFreeze'),
+            chickenHolyShock: boolVal('chickenHolyShock'),
+        };
+        return JSON.stringify(state);
+    }
+
     function snapshotMercState() {
         const form = document.querySelector('form');
         if (!form) {
@@ -202,6 +239,59 @@ document.addEventListener('DOMContentLoaded', function () {
             mercHealingPotionAt: getVal('mercHealingPotionAt'),
             mercRejuvPotionAt: getVal('mercRejuvPotionAt'),
             mercChickenAt: getVal('mercChickenAt'),
+        };
+        return JSON.stringify(state);
+    }
+
+    function snapshotBackToTownState() {
+        const form = document.querySelector('form');
+        if (!form) {
+            return '';
+        }
+        const boolVal = (name) => !!form.querySelector(`input[name="${name}"]`)?.checked;
+        const state = {
+            noHpPotions: boolVal('noHpPotions'),
+            noMpPotions: boolVal('noMpPotions'),
+            mercDied: boolVal('mercDied'),
+            equipmentBroken: boolVal('equipmentBroken'),
+        };
+        return JSON.stringify(state);
+    }
+
+    function snapshotBeltLayoutState() {
+        const form = document.querySelector('form');
+        if (!form) {
+            return '';
+        }
+        const selects = Array.from(form.querySelectorAll('select[name="inventoryBeltColumns[]"]'));
+        const state = selects.map(el => el.value || '');
+        return JSON.stringify(state);
+    }
+
+    function snapshotInventoryLockState() {
+        const form = document.querySelector('form');
+        if (!form) {
+            return '';
+        }
+        const inputs = Array.from(form.querySelectorAll('input[name^="inventoryLock["]'));
+        const state = inputs.map(el => [el.name, el.checked ? 1 : 0]);
+        state.sort((a, b) => a[0].localeCompare(b[0]));
+        return JSON.stringify(state);
+    }
+
+    function snapshotGamblingState() {
+        const form = document.querySelector('form');
+        if (!form) {
+            return '';
+        }
+        const boolVal = (name) => !!form.querySelector(`input[name="${name}"]`)?.checked;
+        const inputVal = (name) => {
+            const el = form.elements.namedItem(name);
+            return el ? (el.value || '') : '';
+        };
+        const state = {
+            gamblingEnabled: boolVal('gamblingEnabled'),
+            gamblingItems: inputVal('gamblingItems'),
         };
         return JSON.stringify(state);
     }
@@ -312,21 +402,31 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function refreshSectionDirtyIndicators() {
         const healthCheckbox = document.getElementById('sectionHealth');
+        const chickenCheckbox = document.getElementById('sectionChickenOnCursesAuras');
         const mercCheckbox = document.getElementById('sectionMerc');
         const runCheckbox = document.getElementById('sectionRuns');
         const packetCheckbox = document.getElementById('sectionPacketCasting');
         const cubeCheckbox = document.getElementById('sectionCubeRecipes');
         const generalCheckbox = document.getElementById('sectionGeneral');
+        const backToTownCheckbox = document.getElementById('sectionBackToTown');
+        const beltLayoutCheckbox = document.getElementById('sectionBeltLayout');
+        const inventoryLockCheckbox = document.getElementById('sectionInventoryLock');
+        const gamblingCheckbox = document.getElementById('sectionGambling');
         const clientCheckbox = document.getElementById('sectionClient');
         const schedulerCheckbox = document.getElementById('sectionScheduler');
         // Muling/Shopping labels not yet tracked for dirty state, so skipped here.
 
         const healthLabelSpan = healthCheckbox && healthCheckbox.nextElementSibling;
+        const chickenLabelSpan = chickenCheckbox && chickenCheckbox.nextElementSibling;
         const mercLabelSpan = mercCheckbox && mercCheckbox.nextElementSibling;
         const runLabelSpan = runCheckbox && runCheckbox.nextElementSibling;
         const packetLabelSpan = packetCheckbox && packetCheckbox.nextElementSibling;
         const cubeLabelSpan = cubeCheckbox && cubeCheckbox.nextElementSibling;
         const generalLabelSpan = generalCheckbox && generalCheckbox.nextElementSibling;
+        const backToTownLabelSpan = backToTownCheckbox && backToTownCheckbox.nextElementSibling;
+        const beltLayoutLabelSpan = beltLayoutCheckbox && beltLayoutCheckbox.nextElementSibling;
+        const inventoryLockLabelSpan = inventoryLockCheckbox && inventoryLockCheckbox.nextElementSibling;
+        const gamblingLabelSpan = gamblingCheckbox && gamblingCheckbox.nextElementSibling;
         const clientLabelSpan = clientCheckbox && clientCheckbox.nextElementSibling;
         const schedulerLabelSpan = schedulerCheckbox && schedulerCheckbox.nextElementSibling;
 
@@ -335,6 +435,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 healthLabelSpan.classList.add('section-dirty');
             } else {
                 healthLabelSpan.classList.remove('section-dirty');
+            }
+        }
+        if (chickenLabelSpan) {
+            if (sectionDirty.chicken) {
+                chickenLabelSpan.classList.add('section-dirty');
+            } else {
+                chickenLabelSpan.classList.remove('section-dirty');
             }
         }
         if (runLabelSpan) {
@@ -372,6 +479,34 @@ document.addEventListener('DOMContentLoaded', function () {
                 generalLabelSpan.classList.remove('section-dirty');
             }
         }
+        if (backToTownLabelSpan) {
+            if (sectionDirty.backToTown) {
+                backToTownLabelSpan.classList.add('section-dirty');
+            } else {
+                backToTownLabelSpan.classList.remove('section-dirty');
+            }
+        }
+        if (beltLayoutLabelSpan) {
+            if (sectionDirty.beltLayout) {
+                beltLayoutLabelSpan.classList.add('section-dirty');
+            } else {
+                beltLayoutLabelSpan.classList.remove('section-dirty');
+            }
+        }
+        if (inventoryLockLabelSpan) {
+            if (sectionDirty.inventoryLock) {
+                inventoryLockLabelSpan.classList.add('section-dirty');
+            } else {
+                inventoryLockLabelSpan.classList.remove('section-dirty');
+            }
+        }
+        if (gamblingLabelSpan) {
+            if (sectionDirty.gambling) {
+                gamblingLabelSpan.classList.add('section-dirty');
+            } else {
+                gamblingLabelSpan.classList.remove('section-dirty');
+            }
+        }
         if (clientLabelSpan) {
             if (sectionDirty.client) {
                 clientLabelSpan.classList.add('section-dirty');
@@ -394,9 +529,39 @@ document.addEventListener('DOMContentLoaded', function () {
         refreshSectionDirtyIndicators();
     }
 
+    function updateChickenDirty() {
+        const current = snapshotChickenState();
+        sectionDirty.chicken = current !== initialSectionState.chicken;
+        refreshSectionDirtyIndicators();
+    }
+
     function updateMercDirty() {
         const current = snapshotMercState();
         sectionDirty.merc = current !== initialSectionState.merc;
+        refreshSectionDirtyIndicators();
+    }
+
+    function updateBackToTownDirty() {
+        const current = snapshotBackToTownState();
+        sectionDirty.backToTown = current !== initialSectionState.backToTown;
+        refreshSectionDirtyIndicators();
+    }
+
+    function updateBeltLayoutDirty() {
+        const current = snapshotBeltLayoutState();
+        sectionDirty.beltLayout = current !== initialSectionState.beltLayout;
+        refreshSectionDirtyIndicators();
+    }
+
+    function updateInventoryLockDirty() {
+        const current = snapshotInventoryLockState();
+        sectionDirty.inventoryLock = current !== initialSectionState.inventoryLock;
+        refreshSectionDirtyIndicators();
+    }
+
+    function updateGamblingDirty() {
+        const current = snapshotGamblingState();
+        sectionDirty.gambling = current !== initialSectionState.gambling;
         refreshSectionDirtyIndicators();
     }
 
@@ -444,7 +609,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Initialize snapshots
     initialSectionState.health = snapshotHealthState();
+    initialSectionState.chicken = snapshotChickenState();
     initialSectionState.merc = snapshotMercState();
+    initialSectionState.backToTown = snapshotBackToTownState();
+    initialSectionState.beltLayout = snapshotBeltLayoutState();
+    initialSectionState.inventoryLock = snapshotInventoryLockState();
+    initialSectionState.gambling = snapshotGamblingState();
     initialSectionState.packet = snapshotPacketState();
     initialSectionState.cube = snapshotCubeState();
     initialSectionState.general = snapshotGeneralState();
@@ -500,6 +670,10 @@ document.addEventListener('DOMContentLoaded', function () {
             + '    <span>Health settings</span>'
             + '  </label>'
             + '  <label>'
+            + '    <input type="checkbox" id="sectionChickenOnCursesAuras">'
+            + '    <span>Chicken on Curses/Auras</span>'
+            + '  </label>'
+            + '  <label>'
             + '    <input type="checkbox" id="sectionMerc">'
             + '    <span>Merc settings</span>'
             + '  </label>'
@@ -522,6 +696,22 @@ document.addEventListener('DOMContentLoaded', function () {
             + '  <label>'
             + '    <input type="checkbox" id="sectionGeneral">'
             + '    <span>General settings</span>'
+            + '  </label>'
+            + '  <label>'
+            + '    <input type="checkbox" id="sectionBackToTown">'
+            + '    <span>Back to Town settings</span>'
+            + '  </label>'
+            + '  <label>'
+            + '    <input type="checkbox" id="sectionBeltLayout">'
+            + '    <span>Belt layout</span>'
+            + '  </label>'
+            + '  <label>'
+            + '    <input type="checkbox" id="sectionInventoryLock">'
+            + '    <span>Inventory lock</span>'
+            + '  </label>'
+            + '  <label>'
+            + '    <input type="checkbox" id="sectionGambling">'
+            + '    <span>Gambling settings</span>'
             + '  </label>'
             + '  <label>'
             + '    <input type="checkbox" id="sectionClient">'
@@ -795,6 +985,32 @@ document.addEventListener('DOMContentLoaded', function () {
         'enabledRecipes',
     ]);
 
+    const CHICKEN_FIELD_NAMES = new Set([
+        'chickenAmplifyDamage',
+        'chickenDecrepify',
+        'chickenLowerResist',
+        'chickenBloodMana',
+        'chickenFanaticism',
+        'chickenMight',
+        'chickenConviction',
+        'chickenHolyFire',
+        'chickenBlessedAim',
+        'chickenHolyFreeze',
+        'chickenHolyShock',
+    ]);
+
+    const BACK_TO_TOWN_FIELD_NAMES = new Set([
+        'noHpPotions',
+        'noMpPotions',
+        'mercDied',
+        'equipmentBroken',
+    ]);
+
+    const GAMBLING_FIELD_NAMES = new Set([
+        'gamblingEnabled',
+        'gamblingItems',
+    ]);
+
     const GENERAL_FIELD_NAMES = new Set([
         'characterUseExtraBuffs',
         'characterUseTeleport',
@@ -817,7 +1033,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     document.addEventListener('change', function (event) {
         const target = event.target;
-        if (!(target instanceof HTMLInputElement)) {
+        if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
             return;
         }
 
@@ -826,8 +1042,33 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
+        if (CHICKEN_FIELD_NAMES.has(target.name)) {
+            updateChickenDirty();
+            return;
+        }
+
         if (MERC_FIELD_NAMES.has(target.name)) {
             updateMercDirty();
+            return;
+        }
+
+        if (BACK_TO_TOWN_FIELD_NAMES.has(target.name)) {
+            updateBackToTownDirty();
+            return;
+        }
+
+        if (target.name === 'inventoryBeltColumns[]') {
+            updateBeltLayoutDirty();
+            return;
+        }
+
+        if (target.name && target.name.startsWith('inventoryLock[')) {
+            updateInventoryLockDirty();
+            return;
+        }
+
+        if (GAMBLING_FIELD_NAMES.has(target.name)) {
+            updateGamblingDirty();
             return;
         }
 
@@ -854,6 +1095,14 @@ document.addEventListener('DOMContentLoaded', function () {
         if (target.name && (target.name === 'schedulerEnabled' || target.name.startsWith('scheduler'))) {
             updateSchedulerDirty();
         }
+    });
+
+    document.addEventListener('click', function (event) {
+        const btn = event.target.closest('.col-lock-btn');
+        if (!btn) {
+            return;
+        }
+        updateInventoryLockDirty();
     });
 
     // Called from updateEnabledRunsHiddenField whenever the run list changes
@@ -890,12 +1139,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function getSectionsSelection() {
         const healthCheckbox = document.getElementById('sectionHealth');
+        const chickenCheckbox = document.getElementById('sectionChickenOnCursesAuras');
         const mercCheckbox = document.getElementById('sectionMerc');
         const runsCheckbox = document.getElementById('sectionRuns');
         const packetCheckbox = document.getElementById('sectionPacketCasting');
         const cubeCheckbox = document.getElementById('sectionCubeRecipes');
         const runewordCheckbox = document.getElementById('sectionRunewordMaker');
         const generalCheckbox = document.getElementById('sectionGeneral');
+        const backToTownCheckbox = document.getElementById('sectionBackToTown');
+        const beltLayoutCheckbox = document.getElementById('sectionBeltLayout');
+        const inventoryLockCheckbox = document.getElementById('sectionInventoryLock');
+        const gamblingCheckbox = document.getElementById('sectionGambling');
         const clientCheckbox = document.getElementById('sectionClient');
         const schedulerCheckbox = document.getElementById('sectionScheduler');
         const mulingCheckbox = document.getElementById('sectionMuling');     // [Added]
@@ -903,12 +1157,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
         return {
             health: !!(healthCheckbox && healthCheckbox.checked),
+            chickenOnCursesAuras: !!(chickenCheckbox && chickenCheckbox.checked),
             merc: !!(mercCheckbox && mercCheckbox.checked),
             runs: !!(runsCheckbox && runsCheckbox.checked),
             packetCasting: !!(packetCheckbox && packetCheckbox.checked),
             cubeRecipes: !!(cubeCheckbox && cubeCheckbox.checked),
             runewordMaker: !!(runewordCheckbox && runewordCheckbox.checked),
             general: !!(generalCheckbox && generalCheckbox.checked),
+            backToTown: !!(backToTownCheckbox && backToTownCheckbox.checked),
+            beltLayout: !!(beltLayoutCheckbox && beltLayoutCheckbox.checked),
+            inventoryLock: !!(inventoryLockCheckbox && inventoryLockCheckbox.checked),
+            gambling: !!(gamblingCheckbox && gamblingCheckbox.checked),
             client: !!(clientCheckbox && clientCheckbox.checked),
             scheduler: !!(schedulerCheckbox && schedulerCheckbox.checked),
             muling: !!(mulingCheckbox && mulingCheckbox.checked),       // [Added]
@@ -953,7 +1212,21 @@ document.addEventListener('DOMContentLoaded', function () {
 
             const data = await response.json().catch(() => ({}));
             if (data && data.success === false) {
-                throw new Error(data.error || 'Bulk apply failed');
+                const errors = Array.isArray(data.errors) ? data.errors : [];
+                if (errors.length > 0) {
+                    const names = errors
+                        .map(err => (err && err.supervisor ? String(err.supervisor) : ''))
+                        .filter(Boolean);
+                    console.error('Bulk apply failures', errors);
+                    if (names.length > 0) {
+                        alert(`Failed to apply settings for: ${names.join(', ')}. Please check the logs for details.`);
+                    } else {
+                        alert('Failed to apply settings. Please check the logs for details.');
+                    }
+                } else {
+                    alert(data.error || 'Failed to apply settings. Please check the logs for details.');
+                }
+                return;
             }
 
             alert('Settings were applied to the selected supervisors.');

@@ -1609,20 +1609,25 @@ func (s *HttpServer) config(w http.ResponseWriter, r *http.Request) {
 // ConfigUpdateOptions defines which sections of the configuration should be updated
 // from the provided form data.
 type ConfigUpdateOptions struct {
-	Identity            bool `json:"identity"` // Name, Auth, etc.
-	Health              bool `json:"health"`
-	Runs                bool `json:"runs"`
-	PacketCasting       bool `json:"packetCasting"`
-	CubeRecipes         bool `json:"cubeRecipes"`
-	RunewordMaker       bool `json:"runewordMaker"`
-	Merc                bool `json:"merc"`
-	General             bool `json:"general"` // Includes class specific options too
-	GeneralExtras       bool `json:"generalExtras"`
-	Client              bool `json:"client"`
-	Scheduler           bool `json:"scheduler"`
-	Muling              bool `json:"muling"`
-	Shopping            bool `json:"shopping"`
-	UpdateAllRunDetails bool `json:"updateAllRunDetails"`
+	Identity             bool `json:"identity"` // Name, Auth, etc.
+	Health               bool `json:"health"`
+	ChickenOnCursesAuras bool `json:"chickenOnCursesAuras"`
+	Runs                 bool `json:"runs"`
+	PacketCasting        bool `json:"packetCasting"`
+	CubeRecipes          bool `json:"cubeRecipes"`
+	RunewordMaker        bool `json:"runewordMaker"`
+	Merc                 bool `json:"merc"`
+	General              bool `json:"general"` // Includes class specific options too
+	GeneralExtras        bool `json:"generalExtras"`
+	BackToTown           bool `json:"backToTown"`
+	BeltLayout           bool `json:"beltLayout"`
+	InventoryLock        bool `json:"inventoryLock"`
+	Gambling             bool `json:"gambling"`
+	Client               bool `json:"client"`
+	Scheduler            bool `json:"scheduler"`
+	Muling               bool `json:"muling"`
+	Shopping             bool `json:"shopping"`
+	UpdateAllRunDetails  bool `json:"updateAllRunDetails"`
 }
 
 func (s *HttpServer) updateConfigFromForm(values url.Values, cfg *config.CharacterCfg, sections ConfigUpdateOptions, runDetailTargets []string) error {
@@ -1771,6 +1776,9 @@ func (s *HttpServer) updateConfigFromForm(values url.Values, cfg *config.Charact
 		if v := values.Get("townChickenAt"); v != "" {
 			cfg.Health.TownChickenAt, _ = strconv.Atoi(v)
 		}
+	}
+
+	if sections.ChickenOnCursesAuras {
 		cfg.ChickenOnCurses.AmplifyDamage = values.Has("chickenAmplifyDamage")
 		cfg.ChickenOnCurses.Decrepify = values.Has("chickenDecrepify")
 		cfg.ChickenOnCurses.LowerResist = values.Has("chickenLowerResist")
@@ -1782,10 +1790,6 @@ func (s *HttpServer) updateConfigFromForm(values url.Values, cfg *config.Charact
 		cfg.ChickenOnAuras.BlessedAim = values.Has("chickenBlessedAim")
 		cfg.ChickenOnAuras.HolyFreeze = values.Has("chickenHolyFreeze")
 		cfg.ChickenOnAuras.HolyShock = values.Has("chickenHolyShock")
-		// Back to town config handled with Health or General?
-		// It was in General in bulkApply but logic is closer to Health/Safety.
-		// Let's allow updating it if either General or Health is selected, or stick to General.
-		// For now, let's keep it under General to match previous bulk logic, or move it if needed.
 	}
 
 	// Mercenary
@@ -1914,6 +1918,48 @@ func (s *HttpServer) updateConfigFromForm(values url.Values, cfg *config.Charact
 		}
 	}
 
+	applyGeneralExtras := sections.General && sections.GeneralExtras
+	if sections.BackToTown && !applyGeneralExtras {
+		cfg.BackToTown.NoHpPotions = values.Has("noHpPotions")
+		cfg.BackToTown.NoMpPotions = values.Has("noMpPotions")
+		cfg.BackToTown.MercDied = values.Has("mercDied")
+		cfg.BackToTown.EquipmentBroken = values.Has("equipmentBroken")
+	}
+
+	if sections.BeltLayout && !applyGeneralExtras {
+		if cols, ok := values["inventoryBeltColumns[]"]; ok {
+			copy(cfg.Inventory.BeltColumns[:], cols)
+		}
+	}
+
+	if sections.InventoryLock && !applyGeneralExtras {
+		for y, row := range cfg.Inventory.InventoryLock {
+			for x := range row {
+				if values.Has(fmt.Sprintf("inventoryLock[%d][%d]", y, x)) {
+					cfg.Inventory.InventoryLock[y][x] = 0
+				} else {
+					cfg.Inventory.InventoryLock[y][x] = 1
+				}
+			}
+		}
+	}
+
+	if sections.Gambling && !applyGeneralExtras {
+		cfg.Gambling.Enabled = values.Has("gamblingEnabled")
+		if raw := strings.TrimSpace(values.Get("gamblingItems")); raw != "" {
+			parts := strings.Split(raw, ",")
+			items := make([]string, 0, len(parts))
+			for _, p := range parts {
+				if p = strings.TrimSpace(p); p != "" {
+					items = append(items, p)
+				}
+			}
+			cfg.Gambling.Items = items
+		} else {
+			cfg.Gambling.Items = []string{}
+		}
+	}
+
 	// Packet Casting
 	if sections.PacketCasting {
 		cfg.PacketCasting.UseForEntranceInteraction = values.Has("packetCastingUseForEntranceInteraction")
@@ -1939,6 +1985,11 @@ func (s *HttpServer) updateConfigFromForm(values url.Values, cfg *config.Charact
 				cfg.CubeRecipes.JewelsToKeep = 1
 			}
 		}
+	}
+
+	// Runeword Maker
+	if sections.RunewordMaker {
+		cfg.Game.RunewordMaker.Enabled = values.Has("runewordMakerEnabled")
 	}
 
 	// Muling
@@ -3434,9 +3485,19 @@ func (s *HttpServer) bulkApplyCharacterSettings(w http.ResponseWriter, r *http.R
 		}
 	}
 
+	type bulkApplyFailure struct {
+		Supervisor string `json:"supervisor"`
+		Error      string `json:"error"`
+	}
+
+	failures := make([]bulkApplyFailure, 0)
 	for name := range targets {
 		cfg, found := config.GetCharacter(name)
 		if !found || cfg == nil {
+			failures = append(failures, bulkApplyFailure{
+				Supervisor: name,
+				Error:      "supervisor config not found",
+			})
 			continue
 		}
 
@@ -3451,17 +3512,29 @@ func (s *HttpServer) bulkApplyCharacterSettings(w http.ResponseWriter, r *http.R
 
 		if err := s.updateConfigFromForm(values, cfg, req.Sections, req.RunDetailTargets); err != nil {
 			s.logger.Error("failed to apply config", slog.String("supervisor", name), slog.Any("error", err))
+			failures = append(failures, bulkApplyFailure{
+				Supervisor: name,
+				Error:      err.Error(),
+			})
 			continue
 		}
 
 		if err := config.SaveSupervisorConfig(name, cfg); err != nil {
 			s.logger.Error("failed to save bulk-applied config", slog.String("supervisor", name), slog.Any("error", err))
+			failures = append(failures, bulkApplyFailure{
+				Supervisor: name,
+				Error:      err.Error(),
+			})
 			continue
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+	resp := map[string]any{"success": len(failures) == 0}
+	if len(failures) > 0 {
+		resp["errors"] = failures
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *HttpServer) resetMuling(w http.ResponseWriter, r *http.Request) {
