@@ -1077,10 +1077,79 @@
             </fieldset>
             <fieldset class="grid">
                 <label>
-                    Authentication Token <small>(⚠️tokens issued after Blizzard's policy update expire in 30 minutes. We recommend logging in with username and password.)</small>
-                    <input type="password" name="AuthToken" placeholder="{{ .Config.AuthToken }}" value="{{ .Config.AuthToken }}"/>
+                    Authentication Token <small>(✅ Tokens are now valid for 1 year. Click Generate to auto-create.)</small>
+                    <div style="display: flex; gap: 10px; align-items: flex-start;">
+                        <input type="password"
+                               id="authTokenField"
+                               name="AuthToken"
+                               placeholder="{{ .Config.AuthToken }}"
+                               value="{{ .Config.AuthToken }}"
+                               style="flex: 1"/>
+                        <button type="button"
+                                id="generateTokenBtn"
+                                onclick="generateBattleNetToken()"
+                                style="white-space: nowrap; min-width: 140px;">
+                            🔑 Generate Token
+                        </button>
+                    </div>
+                    <small id="tokenStatus" style="color: #666; display: block; margin-top: 5px;"></small>
                 </label>
             </fieldset>
+            <script>
+            async function generateBattleNetToken() {
+                const btn = document.getElementById('generateTokenBtn');
+                const status = document.getElementById('tokenStatus');
+                const tokenField = document.getElementById('authTokenField');
+
+                // Get username, password, and realm from the form
+                const username = document.querySelector('input[name="username"]').value;
+                const password = document.querySelector('input[name="password"]').value;
+                const realm = document.querySelector('select[name="realm"]').value;
+
+                // Validate input
+                if (!username || !password) {
+                    status.textContent = '❌ Please enter username and password first';
+                    status.style.color = 'red';
+                    return;
+                }
+
+                // Disable button and show loading state
+                btn.disabled = true;
+                btn.textContent = '⏳ Generating...';
+                status.textContent = 'Logging in to Battle.net... This may take 5-10 seconds.';
+                status.style.color = '#0066cc';
+
+                try {
+                    const response = await fetch('/api/generate-battlenet-token', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            username: username,
+                            password: password,
+                            realm: realm
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok && data.token) {
+                        // Success! Auto-fill the token field
+                        tokenField.value = data.token;
+                        status.textContent = '✅ Token generated successfully! Don\'t forget to Save below.';
+                        status.style.color = 'green';
+                    } else {
+                        status.textContent = '❌ ' + (data.error || 'Failed to generate token');
+                        status.style.color = 'red';
+                    }
+                } catch (error) {
+                    status.textContent = '❌ Error: ' + error.message;
+                    status.style.color = 'red';
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = '🔑 Generate Token';
+                }
+            }
+            </script>
             <h3 id="scheduler-section"><i class="bi bi-calendar-week section-icon" aria-hidden="true"></i>Scheduler</h3><br>
             <label>Automate when the bot runs. Choose between Time Slots (specific hours) or Duration (human-like play patterns).</label><br>
             <fieldset class="grid">

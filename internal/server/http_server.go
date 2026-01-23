@@ -891,10 +891,11 @@ func (s *HttpServer) Listen(port int) error {
 	http.HandleFunc("/reset-droplogs", s.resetDroplogs)
 	http.HandleFunc("/process-list", s.getProcessList)
 	http.HandleFunc("/attach-process", s.attachProcess)
-	http.HandleFunc("/ws", s.wsServer.HandleWebSocket)      // Web socket
-	http.HandleFunc("/initial-data", s.initialData)         // Web socket data
-	http.HandleFunc("/api/reload-config", s.reloadConfig)   // New handler
-	http.HandleFunc("/api/companion-join", s.companionJoin) // Companion join handler
+	http.HandleFunc("/ws", s.wsServer.HandleWebSocket)                         // Web socket
+	http.HandleFunc("/initial-data", s.initialData)                            // Web socket data
+	http.HandleFunc("/api/reload-config", s.reloadConfig)                      // New handler
+	http.HandleFunc("/api/companion-join", s.companionJoin)                    // Companion join handler
+	http.HandleFunc("/api/generate-battlenet-token", s.generateBattleNetToken) // Battle.net token generation
 	http.HandleFunc("/reset-muling", s.resetMuling)
 
 	// Pickit Editor routes
@@ -3610,4 +3611,64 @@ func buildTZGroups() []TZGroup {
 	})
 
 	return result
+}
+
+// generateBattleNetToken handles automatic Battle.net login and token generation
+// This endpoint is called when user clicks "Generate Token" button
+// It uses rod to automate browser login (headless, runs in background)
+func (s *HttpServer) generateBattleNetToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Realm    string `json:"realm"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.logger.Error("Failed to decode request", slog.Any("error", err))
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "Invalid request format",
+		})
+		return
+	}
+
+	// Validate input
+	if req.Username == "" || req.Password == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "Username and password are required",
+		})
+		return
+	}
+
+	s.logger.Info("Generating Battle.net token",
+		slog.String("username", req.Username),
+		slog.String("realm", req.Realm))
+
+	// Call the auto-login function (rod will be started and closed automatically)
+	token, err := game.GetBattleNetToken(req.Username, req.Password, req.Realm)
+	if err != nil {
+		s.logger.Error("Failed to generate Battle.net token",
+			slog.String("username", req.Username),
+			slog.Any("error", err))
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("Failed to generate token: %s", err.Error()),
+		})
+		return
+	}
+
+	s.logger.Info("Battle.net token generated successfully",
+		slog.String("username", req.Username))
+
+	// Return the token
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"token": token,
+	})
 }
