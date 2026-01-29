@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/hectorgimenez/d2go/pkg/data/item"
 	"github.com/hectorgimenez/koolo/internal/pickit"
 	"github.com/hectorgimenez/koolo/internal/utils"
 )
@@ -32,6 +34,8 @@ func (api *PickitAPI) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/pickit/items", api.handleGetItems)
 	mux.HandleFunc("/api/pickit/items/search", api.handleSearchItems)
 	mux.HandleFunc("/api/pickit/items/categories", api.handleGetCategories)
+	mux.HandleFunc("/api/pickit/item-types", api.handleGetItemTypes)
+	mux.HandleFunc("/api/pickit/set-mappings", api.handleGetSetMappings)
 
 	// Rule endpoints
 	mux.HandleFunc("/api/pickit/rules", api.handleGetRules)
@@ -48,6 +52,7 @@ func (api *PickitAPI) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/pickit/files/rules/delete", api.handleDeleteFileRule)
 	mux.HandleFunc("/api/pickit/files/rules/update", api.handleUpdateFileRule)
 	mux.HandleFunc("/api/pickit/files/rules/append", api.handleAppendNIPLine)
+	mux.HandleFunc("/api/pickit/files/rules/reorder", api.handleReorderFileRules)
 	mux.HandleFunc("/api/pickit/browse-folder", api.handleBrowseFolder)
 
 	// Template endpoints
@@ -114,6 +119,159 @@ func (api *PickitAPI) handleGetCategories(w http.ResponseWriter, r *http.Request
 	}
 
 	api.sendJSON(w, response)
+}
+
+// handleGetItemTypes returns D2GO-based item name -> type mappings
+func (api *PickitAPI) handleGetItemTypes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	mapping := map[string]string{}
+	codeToType := map[string]string{}
+	for _, desc := range item.Desc {
+		if desc.Name == "" || desc.Type == "" {
+			continue
+		}
+
+		typeName := mapD2GOType(desc.Type)
+		if typeName == "" {
+			continue
+		}
+
+		nipName := pickit.ToNIPName(desc.Name)
+		if nipName != "" {
+			mapping[nipName] = typeName
+		}
+		if desc.Code != "" {
+			codeKey := strings.ToLower(desc.Code)
+			mapping[codeKey] = typeName
+			codeToType[codeKey] = typeName
+		}
+	}
+
+	for _, uniqueInfo := range item.UniqueItems {
+		if uniqueInfo.Name == "" || uniqueInfo.Code == "" {
+			continue
+		}
+
+		typeName := codeToType[strings.ToLower(uniqueInfo.Code)]
+		if typeName == "" {
+			continue
+		}
+
+		mapping[uniqueInfo.Name] = typeName
+		nipName := pickit.ToNIPName(uniqueInfo.Name)
+		if nipName != "" {
+			mapping[nipName] = typeName
+		}
+	}
+
+	api.sendJSON(w, mapping)
+}
+
+type setItemMapping struct {
+	SetName  string `json:"setName"`
+	ItemName string `json:"itemName"`
+}
+
+type uniqueItemMapping struct {
+	ItemName string `json:"itemName"`
+}
+
+// handleGetSetMappings returns set item mappings for base/item names to set groups
+func (api *PickitAPI) handleGetSetMappings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	codeToBase := map[string]string{}
+	for _, desc := range item.Desc {
+		if desc.Code == "" || desc.Name == "" {
+			continue
+		}
+		codeToBase[strings.ToLower(desc.Code)] = pickit.ToNIPName(desc.Name)
+	}
+
+	setItems := map[string]setItemMapping{}
+	baseCandidates := map[string][]setItemMapping{}
+	for _, setInfo := range item.SetItems {
+		if setInfo.Name == "" || setInfo.SetName == "" {
+			continue
+		}
+
+		mapping := setItemMapping{
+			SetName:  setInfo.SetName,
+			ItemName: setInfo.Name,
+		}
+
+		itemKey := pickit.ToNIPName(setInfo.Name)
+		if itemKey != "" {
+			setItems[itemKey] = mapping
+		}
+
+		if setInfo.Code != "" {
+			baseKey := codeToBase[strings.ToLower(setInfo.Code)]
+			if baseKey != "" {
+				baseCandidates[baseKey] = append(baseCandidates[baseKey], mapping)
+			}
+		}
+	}
+
+	baseItems := map[string]setItemMapping{}
+	for baseKey, mappings := range baseCandidates {
+		if len(mappings) == 1 {
+			baseItems[baseKey] = mappings[0]
+		}
+	}
+
+	api.sendJSON(w, map[string]interface{}{
+		"setItems": setItems,
+		"baseItems": baseItems,
+	})
+}
+
+// handleGetUniqueMappings returns unique item mappings for base/item names
+func (api *PickitAPI) handleGetUniqueMappings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	codeToBase := map[string]string{}
+	for _, desc := range item.Desc {
+		if desc.Code == "" || desc.Name == "" {
+			continue
+		}
+		codeToBase[strings.ToLower(desc.Code)] = pickit.ToNIPName(desc.Name)
+	}
+
+	baseCandidates := map[string][]string{}
+	for _, uniqueInfo := range item.UniqueItems {
+		if uniqueInfo.Name == "" || uniqueInfo.Code == "" {
+			continue
+		}
+
+		baseKey := codeToBase[strings.ToLower(uniqueInfo.Code)]
+		if baseKey == "" {
+			continue
+		}
+
+		baseCandidates[baseKey] = append(baseCandidates[baseKey], uniqueInfo.Name)
+	}
+
+	baseItems := map[string]uniqueItemMapping{}
+	for baseKey, names := range baseCandidates {
+		if len(names) == 1 {
+			baseItems[baseKey] = uniqueItemMapping{ItemName: names[0]}
+		}
+	}
+
+	api.sendJSON(w, map[string]interface{}{
+		"baseItems": baseItems,
+	})
 }
 
 // handleGetRules returns all rules for a character
@@ -843,8 +1001,19 @@ func (api *PickitAPI) loadPickitFileRulesFromPath(pickitDir, fileName string) ([
 	lines := strings.Split(string(content), "\n")
 	validLineCount := 0
 	for i, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "//") {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" {
+			continue
+		}
+
+		enabled := true
+		nipLine := trimmedLine
+		if strings.HasPrefix(trimmedLine, "//") {
+			enabled = false
+			nipLine = strings.TrimSpace(strings.TrimPrefix(trimmedLine, "//"))
+		}
+
+		if nipLine == "" || !strings.Contains(nipLine, "[") {
 			continue
 		}
 
@@ -852,14 +1021,122 @@ func (api *PickitAPI) loadPickitFileRulesFromPath(pickitDir, fileName string) ([
 		rule := pickit.PickitRule{
 			ID:           fmt.Sprintf("%s_%d", fileName, i),
 			FileName:     fileName,
-			GeneratedNIP: line,
-			Enabled:      true,
+			GeneratedNIP: nipLine,
+			Enabled:      enabled,
 		}
 		rules = append(rules, rule)
 	}
 
 	log.Printf("Loaded %d valid rules from %s", validLineCount, filePath)
 	return rules, nil
+}
+
+func parseRuleLineNumber(ruleID string) (int, error) {
+	parts := strings.Split(ruleID, "_")
+	if len(parts) < 2 {
+		return 0, fmt.Errorf("invalid rule ID format")
+	}
+
+	lineNum, err := strconv.Atoi(parts[len(parts)-1])
+	if err != nil || lineNum < 0 {
+		return 0, fmt.Errorf("invalid line number in rule ID")
+	}
+
+	return lineNum, nil
+}
+
+func mapD2GOType(code string) string {
+	switch strings.ToLower(code) {
+	case "armo", "tors":
+		return "armor"
+	case "shie":
+		return "shield"
+	case "boot":
+		return "boots"
+	case "glov":
+		return "gloves"
+	case "belt":
+		return "belt"
+	case "helm", "circ", "pelt", "phlm":
+		if strings.ToLower(code) == "phlm" {
+			return "barbhelm"
+		}
+		return "helm"
+	case "shld", "ashd", "pala":
+		if strings.ToLower(code) == "ashd" || strings.ToLower(code) == "pala" {
+			return "auricshields"
+		}
+		return "shield"
+	case "ring":
+		return "ring"
+	case "amul":
+		return "amulet"
+	case "jewl":
+		return "jewel"
+	case "char":
+		return "charm"
+	case "lcha", "mcha", "scha":
+		return "charm"
+	case "gem":
+		return "gem"
+	case "rune":
+		return "rune"
+	case "rpot", "wpot", "hpot", "mpot":
+		return "misc"
+	case "gold":
+		return "misc"
+	case "scro":
+		return "misc"
+	case "ques":
+		return "misc"
+	case "misc":
+		return "misc"
+	case "head":
+		return "voodooheads"
+	case "bow", "abow":
+		if strings.ToLower(code) == "abow" {
+			return "amazonbow"
+		}
+		return "bow"
+	case "xbow":
+		return "crossbow"
+	case "swor":
+		return "sword"
+	case "axe":
+		return "axe"
+	case "pole":
+		return "polearm"
+	case "spea":
+		return "spear"
+	case "aspe":
+		return "amazonspear"
+	case "staf":
+		return "staff"
+	case "wand":
+		return "wand"
+	case "scep":
+		return "scepter"
+	case "orb":
+		return "sorcorb"
+	case "mace":
+		return "mace"
+	case "hamm":
+		return "hammer"
+	case "club":
+		return "club"
+	case "knif":
+		return "dagger"
+	case "jave":
+		return "javelin"
+	case "ajav":
+		return "amazonjavelin"
+	case "tkni", "taxe":
+		return "throwing"
+	case "h2h", "h2h2":
+		return "assassinclaw"
+	default:
+		return ""
+	}
 }
 
 // handleDeleteFileRule deletes a specific rule from a loaded .nip file
@@ -879,17 +1156,9 @@ func (api *PickitAPI) handleDeleteFileRule(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Parse rule ID (format: filename_lineNumber)
-	parts := strings.Split(ruleID, "_")
-	if len(parts) < 2 {
-		api.sendError(w, "Invalid rule ID format", http.StatusBadRequest)
-		return
-	}
-
-	lineNum := 0
-	fmt.Sscanf(parts[len(parts)-1], "%d", &lineNum)
-	if lineNum == 0 {
-		api.sendError(w, "Invalid line number in rule ID", http.StatusBadRequest)
+	lineNum, err := parseRuleLineNumber(ruleID)
+	if err != nil {
+		api.sendError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -938,6 +1207,99 @@ func (api *PickitAPI) handleDeleteFileRule(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+func (api *PickitAPI) handleReorderFileRules(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	pickitDir := r.URL.Query().Get("path")
+	fileName := r.URL.Query().Get("file")
+	if pickitDir == "" || fileName == "" {
+		http.Error(w, "Missing path or file parameter", http.StatusBadRequest)
+		return
+	}
+
+	var request struct {
+		OrderedIDs []string `json:"orderedIds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(request.OrderedIDs) == 0 {
+		http.Error(w, "orderedIds must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	filePath := filepath.Join(pickitDir, fileName)
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	lines := strings.Split(string(content), "\n")
+	ruleIDs := make([]string, 0, len(lines))
+	ruleLines := make(map[string]string)
+	ruleLineIndices := make([]int, 0, len(lines))
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		enabledLine := strings.TrimSpace(strings.TrimPrefix(trimmed, "//"))
+		if enabledLine == "" || !strings.Contains(enabledLine, "[") {
+			continue
+		}
+		id := fmt.Sprintf("%s_%d", fileName, i)
+		ruleIDs = append(ruleIDs, id)
+		ruleLines[id] = line
+		ruleLineIndices = append(ruleLineIndices, i)
+	}
+
+	if len(request.OrderedIDs) != len(ruleIDs) {
+		http.Error(w, "orderedIds length mismatch", http.StatusBadRequest)
+		return
+	}
+
+	seen := make(map[string]struct{}, len(request.OrderedIDs))
+	orderedLines := make([]string, 0, len(request.OrderedIDs))
+	for _, id := range request.OrderedIDs {
+		line, ok := ruleLines[id]
+		if !ok {
+			http.Error(w, "orderedIds contains unknown rule id", http.StatusBadRequest)
+			return
+		}
+		if _, exists := seen[id]; exists {
+			http.Error(w, "orderedIds contains duplicate rule id", http.StatusBadRequest)
+			return
+		}
+		seen[id] = struct{}{}
+		orderedLines = append(orderedLines, line)
+	}
+
+	if len(orderedLines) != len(ruleLineIndices) {
+		http.Error(w, "orderedIds length mismatch", http.StatusBadRequest)
+		return
+	}
+
+	for i, lineIndex := range ruleLineIndices {
+		lines[lineIndex] = orderedLines[i]
+	}
+
+	updated := strings.Join(lines, "\n")
+	if err := os.WriteFile(filePath, []byte(updated), 0644); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to write file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	api.sendJSON(w, map[string]interface{}{
+		"success": true,
+	})
+}
+
 // handleUpdateFileRule updates a specific rule in a loaded .nip file
 func (api *PickitAPI) handleUpdateFileRule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -975,17 +1337,9 @@ func (api *PickitAPI) handleUpdateFileRule(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Parse rule ID (format: filename_lineNumber)
-	parts := strings.Split(ruleID, "_")
-	if len(parts) < 2 {
-		api.sendError(w, "Invalid rule ID format", http.StatusBadRequest)
-		return
-	}
-
-	lineNum := 0
-	fmt.Sscanf(parts[len(parts)-1], "%d", &lineNum)
-	if lineNum == 0 {
-		api.sendError(w, "Invalid line number in rule ID", http.StatusBadRequest)
+	lineNum, err := parseRuleLineNumber(ruleID)
+	if err != nil {
+		api.sendError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
