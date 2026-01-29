@@ -1,6 +1,7 @@
 package action
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -16,6 +17,8 @@ import (
 	"github.com/hectorgimenez/koolo/internal/ui"
 	"github.com/hectorgimenez/koolo/internal/utils"
 )
+
+var errRunewordMakerSkip = errors.New("runeword maker: skip")
 
 func MakeRunewords() error {
 	ctx := context.Get()
@@ -84,9 +87,17 @@ func MakeRunewords() error {
 					continue
 				}
 
-				if inserts, hasInserts := hasItemsForRunewordRecipe(insertItems, recipe); hasInserts {
+				if inserts, hasInserts := hasItemsForRunewordRecipe(insertItems, recipe, baseItem); hasInserts {
 					err := SocketItems(ctx, recipe, baseItem, inserts...)
 					if err != nil {
+						if errors.Is(err, errRunewordMakerSkip) {
+							ctx.Logger.Debug("Runeword maker: skipping recipe after unsocket failure",
+								"runeword", recipe.Name,
+								"base", baseItem.Name,
+							)
+							continueProcessing = false
+							continue
+						}
 						return err
 					}
 
@@ -126,7 +137,87 @@ func SocketItems(ctx *context.Status, recipe Runeword, base data.Item, items ...
 
 	ctx.SetLastAction("SocketItem")
 
+	if base.IsRuneword {
+		ctx.Logger.Warn("Runeword maker: base is already a runeword; aborting",
+			"runeword", recipe.Name,
+			"base", base.Name,
+		)
+		_ = step.CloseAllMenus()
+		return fmt.Errorf("base already a runeword")
+	}
+
 	ins := ctx.Data.Inventory.ByLocation(item.LocationStash, item.LocationSharedStash, item.LocationInventory)
+	availableRunes := countAvailableRunes(ins)
+	_, isLevelingChar := ctx.Char.(context.LevelingCharacter)
+	allowUnsocket := !isLevelingChar
+	socketPrefix, socketOK, socketReason := runewordSocketPrefix(base, recipe)
+	if !socketOK {
+		if isRuneMismatchReason(socketReason) {
+			ctx.RefreshGameData()
+			if updatedBase, found := ctx.Data.Inventory.FindByID(base.UnitID); found {
+				base = updatedBase
+				socketPrefix, socketOK, socketReason = runewordSocketPrefix(base, recipe)
+			}
+		}
+		if allowUnsocket && canUnsocketMismatchBase(availableRunes, recipe, socketReason) {
+			success, failureReason := unsocketItemWithHelAndScroll(base, "Runeword maker", "base",
+				"runeword", recipe.Name,
+				"base", base.Name,
+				"reason", socketReason,
+			)
+			if !success {
+				ctx.Logger.Warn("Runeword maker: failed to unsocket base; skipping recipe",
+					"runeword", recipe.Name,
+					"base", base.Name,
+					"reason", failureReason,
+				)
+				_ = step.CloseAllMenus()
+				return errRunewordMakerSkip
+			}
+
+			ctx.RefreshGameData()
+			updatedBase, found := ctx.Data.Inventory.FindByID(base.UnitID)
+			if !found {
+				ctx.Logger.Warn("Runeword maker: base item missing after unsocket",
+					"runeword", recipe.Name,
+					"base", base.Name,
+				)
+				_ = step.CloseAllMenus()
+				return fmt.Errorf("base item %s not found after unsocket", base.Name)
+			}
+			base = updatedBase
+
+			ins = ctx.Data.Inventory.ByLocation(item.LocationStash, item.LocationSharedStash, item.LocationInventory)
+			availableRunes = countAvailableRunes(ins)
+			socketPrefix, socketOK, socketReason = runewordSocketPrefix(base, recipe)
+			if !socketOK {
+				ctx.Logger.Warn("Runeword maker: base socketed items still block recipe after unsocket",
+					"runeword", recipe.Name,
+					"base", base.Name,
+					"reason", socketReason,
+				)
+				_ = step.CloseAllMenus()
+				return fmt.Errorf("runeword base incompatible after unsocket: %s", socketReason)
+			}
+		} else {
+			ctx.Logger.Warn("Runeword maker: base socketed items block recipe",
+				"runeword", recipe.Name,
+				"base", base.Name,
+				"reason", socketReason,
+			)
+			_ = step.CloseAllMenus()
+			return fmt.Errorf("runeword base incompatible: %s", socketReason)
+		}
+	}
+	if socketPrefix >= len(recipe.Runes) {
+		ctx.Logger.Warn("Runeword maker: base already has full rune set",
+			"runeword", recipe.Name,
+			"base", base.Name,
+		)
+		_ = step.CloseAllMenus()
+		return fmt.Errorf("runeword base already completed")
+	}
+	missingRunes := recipe.Runes[socketPrefix:]
 
 	for _, itm := range items {
 		if itm.Location.LocationType == item.LocationStash || itm.Location.LocationType == item.LocationSharedStash {
@@ -139,6 +230,17 @@ func SocketItems(ctx *context.Status, recipe Runeword, base data.Item, items ...
 		if err != nil {
 			return err
 		}
+	}
+
+	ctx.RefreshGameData()
+	if cursorItems := ctx.Data.Inventory.ByLocation(item.LocationCursor); len(cursorItems) > 0 {
+		ctx.Logger.Warn("Runeword maker: cursor item detected before socketing; aborting",
+			"runeword", recipe.Name,
+			"item", cursorItems[0].Name,
+		)
+		DropAndRecoverCursorItem()
+		_ = step.CloseAllMenus()
+		return fmt.Errorf("cursor item present before socketing")
 	}
 
 	if base.Location.LocationType == item.LocationSharedStash || base.Location.LocationType == item.LocationStash {
@@ -181,7 +283,7 @@ func SocketItems(ctx *context.Status, recipe Runeword, base data.Item, items ...
 	orderedItems := make([]data.Item, 0)
 
 	// Process each required insert in order
-	for _, requiredInsert := range recipe.Runes {
+	for _, requiredInsert := range missingRunes {
 		for i := range ins {
 			item := &ins[i]
 			if string(item.Name) == requiredInsert && !usedItems[item] {
@@ -191,25 +293,20 @@ func SocketItems(ctx *context.Status, recipe Runeword, base data.Item, items ...
 			}
 		}
 	}
-	// Diagnostic log: report how many inserts we will attempt to socket
-	if len(orderedItems) == 0 {
-		ctx.Logger.Debug("SocketItems: no ordered inserts found for recipe",
+	if len(orderedItems) != len(missingRunes) {
+		ctx.Logger.Warn("SocketItems: missing runes for recipe; aborting socketing",
 			"runeword", recipe.Name,
+			"needed", fmt.Sprintf("%v", missingRunes),
+			"found", len(orderedItems),
 		)
-	} else {
-		names := make([]string, 0, len(orderedItems))
-		for _, it := range orderedItems {
-			names = append(names, string(it.Name))
-		}
-		ctx.Logger.Debug("SocketItems: preparing inserts",
-			"runeword", recipe.Name,
-			"count", len(orderedItems),
-			"items", fmt.Sprintf("%v", names),
-		)
+		_ = step.CloseAllMenus()
+		return fmt.Errorf("missing runes for runeword %s", recipe.Name)
 	}
 
 	previousPage := -1 // Initialize to invalid page number
-	for _, itm := range orderedItems {
+	expectedPrefixLen := socketPrefix
+	for i, itm := range orderedItems {
+		expectedRune := missingRunes[i]
 		if itm.Location.LocationType == item.LocationSharedStash || itm.Location.LocationType == item.LocationStash {
 			currentPage := itm.Location.Page + 1
 			if previousPage != currentPage || currentPage != base.Location.Page {
@@ -218,26 +315,130 @@ func SocketItems(ctx *context.Status, recipe Runeword, base data.Item, items ...
 			previousPage = currentPage
 		}
 
-		screenPos := ui.GetScreenCoordsForItem(itm)
-		ctx.HID.Click(game.LeftButton, screenPos.X, screenPos.Y)
-		utils.Sleep(300)
+		picked := false
+		for attempt := 0; attempt < 2 && !picked; attempt++ {
+			screenPos := ui.GetScreenCoordsForItem(itm)
+			ctx.HID.Click(game.LeftButton, screenPos.X, screenPos.Y)
+			utils.Sleep(200)
 
-		for _, movedBase := range ctx.Data.Inventory.AllItems {
-			if base.UnitID == movedBase.UnitID {
-				if (base.Location.LocationType == item.LocationStash) && base.Location.Page != itm.Location.Page {
-					SwitchStashTab(base.Location.Page + 1)
+			var cursorItems []data.Item
+			for refresh := 0; refresh < 3; refresh++ {
+				ctx.RefreshInventory()
+				cursorItems = ctx.Data.Inventory.ByLocation(item.LocationCursor)
+				if len(cursorItems) > 0 {
+					break
 				}
-
-				basescreenPos := ui.GetScreenCoordsForItem(movedBase)
-				ctx.HID.Click(game.LeftButton, basescreenPos.X, basescreenPos.Y)
-				utils.Sleep(300)
-				if itm.Location.LocationType == item.LocationCursor {
-					step.CloseAllMenus()
-					DropAndRecoverCursorItem()
-					return fmt.Errorf("failed to insert item %s into base %s", itm.Name, base.Name)
-				}
+				utils.Sleep(150)
 			}
+			if len(cursorItems) == 0 {
+				continue
+			}
+
+			if string(cursorItems[0].Name) != expectedRune {
+				if placeCursorItemInInventory(cursorItems[0]) {
+					ctx.Logger.Warn("Runeword maker: unexpected rune on cursor; placed in inventory and retrying",
+						"runeword", recipe.Name,
+						"expected", expectedRune,
+						"actual", cursorItems[0].Name,
+					)
+					utils.Sleep(150)
+					continue
+				}
+				ctx.Logger.Warn("Runeword maker: cursor rune mismatch; no inventory space to place",
+					"runeword", recipe.Name,
+					"expected", expectedRune,
+					"actual", cursorItems[0].Name,
+				)
+				DropAndRecoverCursorItem()
+				_ = step.CloseAllMenus()
+				return fmt.Errorf("cursor rune mismatch for runeword %s", recipe.Name)
+			}
+
+			picked = true
 		}
+		if !picked {
+			ctx.Logger.Warn("Runeword maker: expected rune not on cursor",
+				"runeword", recipe.Name,
+				"expected", expectedRune,
+			)
+			_ = step.CloseAllMenus()
+			return fmt.Errorf("expected rune %s not on cursor", expectedRune)
+		}
+		movedBase, found := ctx.Data.Inventory.FindByID(base.UnitID)
+		if !found {
+			ctx.Logger.Warn("Runeword maker: base item missing while socketing",
+				"runeword", recipe.Name,
+				"base", base.Name,
+			)
+			DropAndRecoverCursorItem()
+			_ = step.CloseAllMenus()
+			return fmt.Errorf("base item %s not found while socketing", base.Name)
+		}
+		if (movedBase.Location.LocationType == item.LocationStash || movedBase.Location.LocationType == item.LocationSharedStash) &&
+			movedBase.Location.Page != itm.Location.Page {
+			SwitchStashTab(movedBase.Location.Page + 1)
+		}
+
+		basescreenPos := ui.GetScreenCoordsForItem(movedBase)
+		ctx.HID.Click(game.LeftButton, basescreenPos.X, basescreenPos.Y)
+		utils.Sleep(200)
+
+		inserted := false
+		lastCursorCount := 0
+		var updatedBase data.Item
+		var lastReason string
+		for attempt := 0; attempt < 3; attempt++ {
+			ctx.RefreshInventory()
+			lastCursorCount = len(ctx.Data.Inventory.ByLocation(item.LocationCursor))
+
+			var found bool
+			updatedBase, found = ctx.Data.Inventory.FindByID(base.UnitID)
+			if !found {
+				utils.Sleep(200)
+				continue
+			}
+
+			newPrefixLen, ok, reason := runewordSocketPrefix(updatedBase, recipe)
+			if ok && newPrefixLen == expectedPrefixLen+1 {
+				inserted = true
+				expectedPrefixLen = newPrefixLen
+				break
+			}
+			lastReason = reason
+			utils.Sleep(200)
+		}
+
+		if !inserted {
+			if lastCursorCount > 0 {
+				ctx.Logger.Warn("Runeword maker: failed to insert rune into base",
+					"runeword", recipe.Name,
+					"rune", expectedRune,
+					"base", base.Name,
+				)
+				DropAndRecoverCursorItem()
+				_ = step.CloseAllMenus()
+				return fmt.Errorf("failed to insert rune %s into base %s", expectedRune, base.Name)
+			}
+			if lastReason != "" {
+				ctx.Logger.Warn("Runeword maker: base sockets no longer match recipe",
+					"runeword", recipe.Name,
+					"base", base.Name,
+					"reason", lastReason,
+				)
+				_ = step.CloseAllMenus()
+				return fmt.Errorf("base socket mismatch after inserting rune %s", expectedRune)
+			}
+			ctx.Logger.Warn("Runeword maker: base socket prefix did not advance",
+				"runeword", recipe.Name,
+				"base", base.Name,
+				"expectedPrefix", expectedPrefixLen+1,
+				"actualPrefix", expectedPrefixLen,
+			)
+			_ = step.CloseAllMenus()
+			return fmt.Errorf("base socket prefix did not advance for runeword %s", recipe.Name)
+		}
+
+		base = updatedBase
 		utils.Sleep(300)
 	}
 	return step.CloseAllMenus()
@@ -312,7 +513,12 @@ func hasBaseForRunewordRecipe(items []data.Item, recipe Runeword) (data.Item, bo
 		}
 	}
 
+	availableRunes := countAvailableRunes(items)
+	allowUnsocket := !isLevelingChar
+
 	var validBases []data.Item
+	socketPrefixes := make(map[data.UnitID]int)
+	unsocketCandidates := make(map[data.UnitID]bool)
 	for _, itm := range items {
 		itemType := itm.Type().Code
 
@@ -377,10 +583,6 @@ func hasBaseForRunewordRecipe(items []data.Item, recipe Runeword) (data.Item, bo
 			}
 		}
 
-		if itm.HasSocketedItems() {
-			continue
-		}
-
 		// Quality handling: reroll rules beat overrides; otherwise allow <= Superior.
 		switch effectiveQualityMode {
 		case "normal":
@@ -395,6 +597,37 @@ func hasBaseForRunewordRecipe(items []data.Item, recipe Runeword) (data.Item, bo
 			if itm.Quality > item.QualitySuperior {
 				continue
 			}
+		}
+
+		if itm.IsRuneword {
+			continue
+		}
+
+		socketPrefix, ok, reason := runewordSocketPrefix(itm, recipe)
+		if !ok {
+			if allowUnsocket && itm.HasSocketedItems() && canUnsocketMismatchBase(availableRunes, recipe, reason) {
+				socketPrefixes[itm.UnitID] = 0
+				unsocketCandidates[itm.UnitID] = true
+				validBases = append(validBases, itm)
+				continue
+			}
+			if itm.HasSocketedItems() || itm.IsRuneword {
+				ctx.Logger.Debug("Skipping base - existing sockets block runeword recipe",
+					"runeword", recipe.Name,
+					"base", itm.Name,
+					"reason", reason,
+				)
+			}
+			continue
+		}
+		if socketPrefix >= len(recipe.Runes) {
+			if itm.HasSocketedItems() {
+				ctx.Logger.Debug("Skipping base - already fully socketed for recipe",
+					"runeword", recipe.Name,
+					"base", itm.Name,
+				)
+			}
+			continue
 		}
 
 		// Apply base tier restriction (normal/exceptional/elite) when not leveling.
@@ -434,6 +667,7 @@ func hasBaseForRunewordRecipe(items []data.Item, recipe Runeword) (data.Item, bo
 			}
 		}
 
+		socketPrefixes[itm.UnitID] = socketPrefix
 		validBases = append(validBases, itm)
 	}
 
@@ -459,6 +693,17 @@ func hasBaseForRunewordRecipe(items []data.Item, recipe Runeword) (data.Item, bo
 			if len(validSortStats) > 0 {
 
 				slices.SortFunc(validBases, func(a, b data.Item) int {
+					prefixA := socketPrefixes[a.UnitID]
+					prefixB := socketPrefixes[b.UnitID]
+					if prefixA != prefixB {
+						return prefixB - prefixA // Prefer bases with more matching runes
+					}
+					if unsocketCandidates[a.UnitID] != unsocketCandidates[b.UnitID] {
+						if unsocketCandidates[a.UnitID] {
+							return 1
+						}
+						return -1
+					}
 					for _, statID := range validSortStats {
 						statA, foundA := a.FindStat(statID, 0)
 						statB, foundB := b.FindStat(statID, 0)
@@ -486,6 +731,17 @@ func hasBaseForRunewordRecipe(items []data.Item, recipe Runeword) (data.Item, bo
 
 		// Fall back to requirement-based sorting
 		slices.SortFunc(validBases, func(a, b data.Item) int {
+			prefixA := socketPrefixes[a.UnitID]
+			prefixB := socketPrefixes[b.UnitID]
+			if prefixA != prefixB {
+				return prefixB - prefixA // Prefer bases with more matching runes
+			}
+			if unsocketCandidates[a.UnitID] != unsocketCandidates[b.UnitID] {
+				if unsocketCandidates[a.UnitID] {
+					return 1
+				}
+				return -1
+			}
 			aTotal := a.Desc().RequiredStrength + a.Desc().RequiredDexterity
 			bTotal := b.Desc().RequiredStrength + b.Desc().RequiredDexterity
 			return aTotal - bTotal // Lower requirements first
@@ -501,34 +757,193 @@ func hasBaseForRunewordRecipe(items []data.Item, recipe Runeword) (data.Item, bo
 	return bestBase, true
 }
 
-func hasItemsForRunewordRecipe(items []data.Item, recipe Runeword) ([]data.Item, bool) {
+func countAvailableRunes(items []data.Item) map[string]int {
+	available := make(map[string]int)
+	for _, itm := range items {
+		name := string(itm.Name)
+		if strings.HasSuffix(name, "Rune") {
+			available[name]++
+		}
+	}
+	return available
+}
 
-	RunewordRecipeItems := make(map[string]int)
-	for _, item := range recipe.Runes {
-		RunewordRecipeItems[item]++
+func socketedRuneNames(base data.Item) []string {
+	socketed := base.GetSocketedItems()
+	names := make([]string, 0, len(socketed))
+	for _, itm := range socketed {
+		names = append(names, string(itm.Name))
+	}
+	return names
+}
+
+func expectedRunePrefix(recipe Runeword, count int) []string {
+	if count <= 0 {
+		return nil
+	}
+	if count > len(recipe.Runes) {
+		count = len(recipe.Runes)
+	}
+	return recipe.Runes[:count]
+}
+
+func findInventoryPlacementForItem(itm data.Item) (data.Position, bool) {
+	ctx := context.Get()
+	grid := ctx.Data.Inventory.Matrix()
+	lockConfig := ctx.CharacterCfg.Inventory.InventoryLock
+	if len(lockConfig) > 0 {
+		for y := 0; y < len(grid) && y < len(lockConfig); y++ {
+			for x := 0; x < len(grid[0]) && x < len(lockConfig[y]); x++ {
+				if lockConfig[y][x] == 0 {
+					grid[y][x] = true
+				}
+			}
+		}
 	}
 
-	itemsForRecipe := []data.Item{}
+	width := itm.Desc().InventoryWidth
+	height := itm.Desc().InventoryHeight
+	for y := 0; y <= len(grid)-height; y++ {
+		for x := 0; x <= len(grid[0])-width; x++ {
+			freeSpace := true
+			for dy := 0; dy < height; dy++ {
+				for dx := 0; dx < width; dx++ {
+					if grid[y+dy][x+dx] {
+						freeSpace = false
+						break
+					}
+				}
+				if !freeSpace {
+					break
+				}
+			}
+			if freeSpace {
+				return data.Position{X: x, Y: y}, true
+			}
+		}
+	}
 
+	return data.Position{}, false
+}
+
+func placeCursorItemInInventory(itm data.Item) bool {
+	ctx := context.Get()
+	pos, ok := findInventoryPlacementForItem(itm)
+	if !ok {
+		return false
+	}
+
+	targetCoords := ui.GetScreenCoordsForInventoryPosition(pos, item.LocationInventory)
+	ctx.HID.Click(game.LeftButton, targetCoords.X, targetCoords.Y)
+	utils.Sleep(200)
+	ctx.RefreshInventory()
+	return len(ctx.Data.Inventory.ByLocation(item.LocationCursor)) == 0
+}
+
+func hasRunesForRecipeWithHel(available map[string]int, recipe Runeword) bool {
+	if available["HelRune"] < 1 {
+		return false
+	}
+
+	required := make(map[string]int)
+	for _, r := range recipe.Runes {
+		required[r]++
+	}
+
+	for runeName, cnt := range required {
+		needed := cnt
+		if runeName == "HelRune" {
+			needed = cnt + 1
+		}
+		if available[runeName] < needed {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isRuneMismatchReason(reason string) bool {
+	return strings.HasPrefix(reason, "rune mismatch")
+}
+
+func canUnsocketMismatchBase(availableRunes map[string]int, recipe Runeword, reason string) bool {
+	if !isRuneMismatchReason(reason) {
+		return false
+	}
+	if !hasRunesForRecipeWithHel(availableRunes, recipe) {
+		return false
+	}
+	return true
+}
+
+func collectRunesForRecipe(items []data.Item, required []string) ([]data.Item, bool) {
+	requiredRunes := make(map[string]int)
+	for _, runeName := range required {
+		requiredRunes[runeName]++
+	}
+
+	itemsForRecipe := make([]data.Item, 0)
 	for _, item := range items {
-		if count, ok := RunewordRecipeItems[string(item.Name)]; ok {
-
+		if count, ok := requiredRunes[string(item.Name)]; ok {
 			itemsForRecipe = append(itemsForRecipe, item)
 
-			// Check if we now have exactly the needed count before decrementing
 			count -= 1
 			if count == 0 {
-				delete(RunewordRecipeItems, string(item.Name))
-				if len(RunewordRecipeItems) == 0 {
+				delete(requiredRunes, string(item.Name))
+				if len(requiredRunes) == 0 {
 					return itemsForRecipe, true
 				}
 			} else {
-				RunewordRecipeItems[string(item.Name)] = count
+				requiredRunes[string(item.Name)] = count
 			}
 		}
 	}
 
 	return nil, false
+}
+
+func hasItemsForRunewordRecipe(items []data.Item, recipe Runeword, base data.Item) ([]data.Item, bool) {
+
+	if base.IsRuneword {
+		return nil, false
+	}
+
+	socketPrefix, ok, reason := runewordSocketPrefix(base, recipe)
+	if !ok {
+		availableRunes := countAvailableRunes(items)
+		_, isLevelingChar := context.Get().Char.(context.LevelingCharacter)
+		if !isLevelingChar && canUnsocketMismatchBase(availableRunes, recipe, reason) {
+			return collectRunesForRecipe(items, recipe.Runes)
+		}
+		return nil, false
+	}
+	if socketPrefix >= len(recipe.Runes) {
+		return nil, false
+	}
+
+	return collectRunesForRecipe(items, recipe.Runes[socketPrefix:])
+}
+
+func runewordSocketPrefix(base data.Item, recipe Runeword) (int, bool, string) {
+	socketed := base.GetSocketedItems()
+	if len(socketed) == 0 {
+		return 0, true, ""
+	}
+	if len(socketed) > len(recipe.Runes) {
+		return 0, false, "too many socketed items"
+	}
+
+	for i, socketedItem := range socketed {
+		if !socketedItem.Type().IsType(item.TypeRune) {
+			return 0, false, fmt.Sprintf("non-rune socketed item %s", socketedItem.Name)
+		}
+		if string(socketedItem.Name) != recipe.Runes[i] {
+			return 0, false, fmt.Sprintf("rune mismatch at slot %d", i+1)
+		}
+	}
+
+	return len(socketed), true, ""
 }
 
 // characterMeetsRequirements checks if the character has enough strength and dexterity to wear an item
