@@ -25,7 +25,7 @@ let rulesSortable = null;
 let qualitySortable = null;
 let typeSortable = null;
 let typeSortMode = 0; // 0: name asc, 1: name desc, 2: count desc, 3: count asc
-let ruleSortMode = 0; // 0: default, 1: A-Z, 2: Z-A
+let ruleSortMode = 1; // 0: default, 1: A-Z, 2: Z-A
 const recentStorageKey = 'pickitRecentRules';
 let recentRuleMap = loadRecentRuleMap();
 
@@ -163,7 +163,16 @@ const uniqueCharmNameTypeMap = new Map([
     ['therottingfissure', 'sunder'],
 ]);
 
+const baseViewport = {
+    width: 1040,
+    height: 720,
+    minScale: 0.7,
+};
+
 window.addEventListener('DOMContentLoaded', () => {
+    applyViewportScale();
+    window.addEventListener('resize', applyViewportScale);
+
     const savedPath = localStorage.getItem('pickitPath');
     if (savedPath) {
         currentPickitPath = savedPath;
@@ -175,6 +184,25 @@ window.addEventListener('DOMContentLoaded', () => {
     bindUI();
     loadItemMappings();
 });
+
+function applyViewportScale() {
+    const scaleX = window.innerWidth / baseViewport.width;
+    const scaleY = window.innerHeight / baseViewport.height;
+    const rawScale = Math.min(scaleX, scaleY, 1);
+    const clamped = Math.max(baseViewport.minScale, rawScale);
+    const useZoom = typeof document.body.style.zoom !== 'undefined';
+    if (useZoom) {
+        document.body.style.zoom = clamped.toFixed(3);
+        document.documentElement.style.setProperty('--ui-scale', '1');
+    } else {
+        document.documentElement.style.setProperty('--ui-scale', clamped.toFixed(3));
+    }
+    if (clamped < 1) {
+        document.documentElement.classList.add('ui-scaled');
+    } else {
+        document.documentElement.classList.remove('ui-scaled');
+    }
+}
 
 function bindUI() {
     const searchInput = document.getElementById('globalSearch');
@@ -1245,6 +1273,11 @@ function buildFilters() {
         typeEntries = applyStoredEntryOrder(typeEntries, loadStoredOrder(`pickitTypeOrder:${activeQuality}`));
     }
     typeEntries = [['Recent', recentSource.length], ...typeEntries];
+    const availableTypes = new Set(typeEntries.map(entry => entry[0]));
+    if (!availableTypes.has(activeType)) {
+        activeType = 'All';
+    }
+
     typeList.innerHTML = typeEntries
         .map(([type, count]) => {
             let label = type === 'All' ? 'All' : (activeQuality === 'set' ? type : formatTypeLabel(type));
@@ -1386,7 +1419,7 @@ function applyFilters() {
         filteredRules = allRules.filter(ruleMatchesFilters);
     }
 
-    if (ruleSortMode === 0 && activeType === 'All' && filterStatusMode === 0 && !searchTerm) {
+    if (ruleSortMode === 0 && filterStatusMode === 0 && !searchTerm) {
         const indexMap = new Map(allRules.map((rule, index) => [rule.id, index]));
         filteredRules.sort((a, b) => {
             if (a.enabled !== b.enabled) {
@@ -1435,12 +1468,15 @@ function ruleMatchesFilters(rule) {
     if (filterEthereal && !isEtherealRule(rule)) {
         return false;
     }
-    if (filterUnidentify) {
-        if (!isUnidentifyRule(rule)) {
+    const skipUnidentify = activeQuality === 'misc' || activeQuality === 'base';
+    if (!skipUnidentify) {
+        if (filterUnidentify) {
+            if (!isUnidentifyRule(rule)) {
+                return false;
+            }
+        } else if (isUnidentifyRule(rule)) {
             return false;
         }
-    } else if (isUnidentifyRule(rule)) {
-        return false;
     }
     if (filterFavorites && !favorites.has(rule.id)) {
         return false;
@@ -1585,7 +1621,10 @@ function renderRuleCard(rule) {
     const unidentifyMarkup = isUnidentifyRule(rule) ? '<span class="pill">Unidentify</span>' : '';
     const etherealState = getEtherealFlagState(rule);
     const etherealActive = etherealState === 'ethereal' ? ' active' : '';
-    const etherealMarkup = `<button class="pill pill-toggle${etherealActive}" data-action="toggle-ethereal" data-rule-id="${escapeHtml(rule.id)}">Ethereal</button>`;
+    const etherealLabel = etherealState === 'nonethereal' ? 'Non-Ethereal' : 'Ethereal';
+    const etherealMarkup = etherealState === 'unknown'
+        ? ''
+        : `<button class="pill pill-toggle${etherealActive}" data-action="toggle-ethereal" data-rule-id="${escapeHtml(rule.id)}">${etherealLabel}</button>`;
 
     return `
         <div class="rule-card ${rule.enabled ? '' : 'disabled'}" data-rule-id="${escapeHtml(rule.id)}">

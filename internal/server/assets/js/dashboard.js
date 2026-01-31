@@ -1480,8 +1480,8 @@ function openPickitEditor() {
   const url =
     window.location.protocol + "//" + window.location.host + "/pickit-editor";
 
-  // Open in default browser
-  window.open(url, "_blank");
+  // Open in same window
+  window.location.href = url;
 }
 
 function openDropManager() {

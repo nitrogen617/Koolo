@@ -40,6 +40,13 @@
             flex-direction: column;
         }
 
+        .app-scale {
+            min-height: calc(100vh / var(--ui-scale, 1));
+            transform: scale(var(--ui-scale, 1));
+            transform-origin: top left;
+            width: calc(100% / var(--ui-scale, 1));
+        }
+
         .topbar {
             display: flex;
             align-items: center;
@@ -149,6 +156,19 @@
             padding: 14px 24px;
             background: var(--card);
             border-bottom: 1px solid var(--line);
+        }
+
+        .filterbar.quality-footer {
+            position: sticky;
+            top: 92px;
+            z-index: 45;
+            border-bottom: 1px solid var(--line);
+            background: var(--card);
+            padding: 16px 24px 12px;
+        }
+
+        .layout {
+            padding-top: 0;
         }
 
         .quality-tabs {
@@ -700,10 +720,19 @@
                 padding: 16px;
             }
         }
+
+        html.ui-scaled .layout {
+            grid-template-columns: 280px 1fr;
+        }
+
+        html.ui-scaled .sidebar {
+            order: 0;
+        }
     </style>
 </head>
 <body>
     <div class="app">
+        <div class="app-scale">
         <header class="topbar">
             <div class="topbar-left">
                 <button class="icon-btn" aria-label="back" onclick="history.back()">&#8592;</button>
@@ -720,7 +749,7 @@
             </div>
         </header>
 
-        <div class="filterbar">
+        <div class="filterbar quality-footer">
             <div class="quality-tabs" id="qualityTabs"></div>
         </div>
 
@@ -751,6 +780,7 @@
 
                 <div class="rule-list" id="rulesList"></div>
             </main>
+        </div>
         </div>
     </div>
 
