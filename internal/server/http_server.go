@@ -37,6 +37,7 @@ import (
 	"github.com/hectorgimenez/koolo/internal/bot"
 	"github.com/hectorgimenez/koolo/internal/config"
 	ctx "github.com/hectorgimenez/koolo/internal/context"
+	"github.com/hectorgimenez/koolo/internal/debug/debugoverlay"
 	"github.com/hectorgimenez/koolo/internal/drop"
 	"github.com/hectorgimenez/koolo/internal/event"
 	"github.com/hectorgimenez/koolo/internal/game"
@@ -787,6 +788,19 @@ func (s *HttpServer) getStatusData() IndexData {
 			if stats.UI.Class == "" {
 				stats.UI.Class = cfg.Character.Class
 			}
+			overlayEnabled := config.Version == "dev" && cfg.EnableDebugOverlay
+			stats.DebugOverlay.Enabled = overlayEnabled
+			if overlayEnabled {
+				if supCtx := s.manager.GetContext(supervisorName); supCtx != nil {
+					status := &ctx.Status{
+						Context:  supCtx,
+						Priority: supCtx.ExecutionPriority,
+					}
+					if overlay := debugoverlay.Instance(status); overlay != nil {
+						stats.DebugOverlay.Running = overlay.IsRunning()
+					}
+				}
+			}
 			// Add companion information to the stats
 			if cfg.Companion.Enabled && !cfg.Companion.Leader {
 				// This is a companion follower
@@ -880,6 +894,7 @@ func (s *HttpServer) Listen(port int) error {
 	http.HandleFunc("/start", s.startSupervisor)
 	http.HandleFunc("/stop", s.stopSupervisor)
 	http.HandleFunc("/togglePause", s.togglePause)
+	http.HandleFunc("/toggleOverlay", s.toggleOverlay)
 	http.HandleFunc("/autostart/toggle", s.toggleAutoStart)
 	http.HandleFunc("/autostart/run-once", s.runAutoStartOnce)
 	http.HandleFunc("/debug", s.debugHandler)
@@ -1290,6 +1305,21 @@ func (s *HttpServer) togglePause(w http.ResponseWriter, r *http.Request) {
 	s.initialData(w, r)
 }
 
+func (s *HttpServer) toggleOverlay(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("characterName")
+	if name == "" {
+		http.Error(w, "characterName is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.manager.ToggleDebugOverlay(name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.initialData(w, r)
+}
+
 func (s *HttpServer) index(w http.ResponseWriter) {
 	status := make(map[string]bot.Stats)
 	drops := make(map[string]int)
@@ -1518,6 +1548,7 @@ func (s *HttpServer) config(w http.ResponseWriter, r *http.Request) {
 		// Debug
 		newConfig.Debug.Log = r.Form.Get("debug_log") == "true"
 		newConfig.Debug.Screenshots = r.Form.Get("debug_screenshots") == "true"
+		newConfig.Debug.Overlay = r.Form.Get("debug_overlay") == "true"
 		// Discord
 		newConfig.Discord.Enabled = r.Form.Get("discord_enabled") == "true"
 		newConfig.Discord.EnableGameCreatedMessages = r.Form.Has("enable_game_created_messages")
@@ -1651,6 +1682,11 @@ func (s *HttpServer) updateConfigFromForm(values url.Values, cfg *config.Charact
 		cfg.KillD2OnStop = values.Has("kill_d2_process")
 		cfg.ClassicMode = values.Has("classic_mode")
 		cfg.HidePortraits = values.Has("hide_portraits")
+		if config.Version == "dev" {
+			cfg.EnableDebugOverlay = values.Has("enable_debug_overlay")
+		} else {
+			cfg.EnableDebugOverlay = false
+		}
 	}
 
 	// Scheduler
@@ -2304,6 +2340,7 @@ func (s *HttpServer) characterSettings(w http.ResponseWriter, r *http.Request) {
 			s.templates.ExecuteTemplate(w, "character_settings.gohtml", CharacterSettings{
 				Version:               config.Version,
 				ErrorMessage:          err.Error(),
+				DebugOverlayEnabled:   config.Koolo.Debug.Overlay,
 				SkillOptions:          defaultSkillOptions,
 				LevelingSequenceFiles: sequenceFiles,
 				RunFavoriteRuns:       config.Koolo.RunFavoriteRuns,
@@ -2321,6 +2358,7 @@ func (s *HttpServer) characterSettings(w http.ResponseWriter, r *http.Request) {
 					Version:               config.Version,
 					ErrorMessage:          err.Error(),
 					Supervisor:            supervisorName,
+					DebugOverlayEnabled:   config.Koolo.Debug.Overlay,
 					SkillOptions:          defaultSkillOptions,
 					LevelingSequenceFiles: sequenceFiles,
 					RunFavoriteRuns:       config.Koolo.RunFavoriteRuns,
@@ -2333,6 +2371,7 @@ func (s *HttpServer) characterSettings(w http.ResponseWriter, r *http.Request) {
 					Version:               config.Version,
 					ErrorMessage:          "failed to load newly created configuration",
 					Supervisor:            supervisorName,
+					DebugOverlayEnabled:   config.Koolo.Debug.Overlay,
 					SkillOptions:          defaultSkillOptions,
 					LevelingSequenceFiles: sequenceFiles,
 					RunFavoriteRuns:       config.Koolo.RunFavoriteRuns,
@@ -2367,6 +2406,11 @@ func (s *HttpServer) characterSettings(w http.ResponseWriter, r *http.Request) {
 		cfg.KillD2OnStop = r.Form.Has("kill_d2_process")
 		cfg.ClassicMode = r.Form.Has("classic_mode")
 		cfg.HidePortraits = r.Form.Has("hide_portraits")
+		if config.Version == "dev" {
+			cfg.EnableDebugOverlay = r.Form.Has("enable_debug_overlay")
+		} else {
+			cfg.EnableDebugOverlay = false
+		}
 
 		// Health config
 		cfg.Health.HealingPotionAt, _ = strconv.Atoi(r.Form.Get("healingPotionAt"))
@@ -3070,6 +3114,7 @@ func (s *HttpServer) characterSettings(w http.ResponseWriter, r *http.Request) {
 		Supervisor:            supervisor,
 		CloneSource:           cloneSource,
 		Config:                cfg,
+		DebugOverlayEnabled:   config.Koolo.Debug.Overlay,
 		SkillOptions:          skillOptions,
 		SkillPrereqs:          buildSkillPrereqsForBuild(cfg.Character.Class),
 		DayNames:              dayNames,

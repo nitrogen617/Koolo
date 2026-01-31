@@ -48,8 +48,11 @@ func NewGameReader(cfg *config.CharacterCfg, supervisorName string, pid uint32, 
 	}
 
 	gr.updateWindowPositionData()
-
 	return gr, nil
+}
+
+func (gd *MemoryReader) Close() error {
+	return gd.Process.Close()
 }
 
 func (gd *MemoryReader) MapSeed() uint {
@@ -243,6 +246,10 @@ func (gd *MemoryReader) updateWindowPositionData() {
 	gd.WindowTopY = int(point.Y)
 	gd.GameAreaSizeX = int(pos.RcNormalPosition.Right) - gd.WindowLeftX - 9
 	gd.GameAreaSizeY = int(pos.RcNormalPosition.Bottom) - gd.WindowTopY - 9
+}
+
+func (gd *MemoryReader) UpdateWindowPositionData() {
+	gd.updateWindowPositionData()
 }
 
 func (gd *MemoryReader) GetData() Data {

@@ -41,6 +41,7 @@ type KooloCfg struct {
 		Log         bool `yaml:"log"`
 		Screenshots bool `yaml:"screenshots"`
 		RenderMap   bool `yaml:"renderMap"`
+		Overlay     bool `yaml:"overlay"`
 	} `yaml:"debug"`
 	FirstRun              bool   `yaml:"firstRun"`
 	UseCustomSettings     bool   `yaml:"useCustomSettings"`
@@ -215,6 +216,7 @@ type CharacterCfg struct {
 	ClassicMode          bool   `yaml:"classicMode"`
 	UseCentralizedPickit bool   `yaml:"useCentralizedPickit"`
 	HidePortraits        bool   `yaml:"hidePortraits"`
+	EnableDebugOverlay   bool   `yaml:"enableDebugOverlay"`
 	AutoStart            bool   `yaml:"autoStart"`
 
 	ConfigFolderName string `yaml:"-"`

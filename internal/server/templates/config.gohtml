@@ -286,6 +286,17 @@
                         />
                         Save screenshot on error
                     </label>
+                    <label>
+                        <input
+                                {{ if .Debug.Overlay }}
+                                    checked="checked"
+                                {{ end }}
+                                type="checkbox"
+                                name="debug_overlay"
+                                value="true"
+                        />
+                        Enable debug overlays (unlock debug window options)
+                    </label>
                 </fieldset>
                 <h4>Discord integration</h4>
                 <div style="display:flex; gap:1rem; align-items:center;">

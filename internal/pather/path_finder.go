@@ -3,6 +3,8 @@ package pather
 import (
 	"fmt"
 	"math"
+	"sync/atomic"
+	"time"
 
 	"github.com/hectorgimenez/d2go/pkg/data"
 	"github.com/hectorgimenez/d2go/pkg/data/area"
@@ -21,7 +23,22 @@ type PathFinder struct {
 	// astarBuffers are reusable A* buffers to avoid allocations. Thread-safe without
 	// synchronization because pathfinding is only called from the PriorityNormal goroutine
 	// (main bot loop). Background goroutines (data refresh, health check) do not perform pathfinding.
-	astarBuffers *astar.AStarBuffers
+	astarBuffers  *astar.AStarBuffers
+	lastDebugPath atomic.Pointer[pathDebugCacheEntry]
+}
+
+type pathDebugCacheEntry struct {
+	from      data.Position
+	to        data.Position
+	path      Path
+	timestamp time.Time
+}
+
+type PathDebugInfo struct {
+	From      data.Position
+	To        data.Position
+	Path      Path
+	Timestamp time.Time
 }
 
 func NewPathFinder(gr *game.MemoryReader, data *game.Data, hid *game.HID, cfg *config.CharacterCfg) *PathFinder {
@@ -60,6 +77,8 @@ func (pf *PathFinder) GetPath(to data.Position) (Path, int, bool) {
 func (pf *PathFinder) GetPathFrom(from, to data.Position) (Path, int, bool) {
 	a := pf.data.AreaData
 	canTeleport := pf.data.CanTeleport()
+	worldFrom := from
+	worldTo := to
 
 	// We don't want to modify the original grid
 	grid := a.Grid.Copy()
@@ -95,6 +114,7 @@ func (pf *PathFinder) GetPathFrom(from, to data.Position) (Path, int, bool) {
 			to = walkableTo
 		}
 	}
+	worldTo = to
 	from = grid.RelativePosition(from)
 	to = grid.RelativePosition(to)
 
@@ -174,7 +194,58 @@ func (pf *PathFinder) GetPathFrom(from, to data.Position) (Path, int, bool) {
 		pf.renderMap(grid, from, to, path)
 	}
 
+	if found {
+		pathCopy := make(Path, len(path))
+		copy(pathCopy, path)
+		for i := range pathCopy {
+			pathCopy[i].X += grid.OffsetX
+			pathCopy[i].Y += grid.OffsetY
+		}
+		pf.storeDebugPath(worldFrom, worldTo, pathCopy)
+	} else {
+		pf.lastDebugPath.Store(nil)
+	}
+
 	return path, distance, found
+}
+
+func (pf *PathFinder) storeDebugPath(from, to data.Position, path Path) {
+	if len(path) == 0 {
+		pf.lastDebugPath.Store(nil)
+		return
+	}
+
+	copyPath := make(Path, len(path))
+	copy(copyPath, path)
+
+	entry := &pathDebugCacheEntry{
+		from:      from,
+		to:        to,
+		path:      copyPath,
+		timestamp: time.Now(),
+	}
+	pf.lastDebugPath.Store(entry)
+}
+
+func (pf *PathFinder) LastPathDebug() (PathDebugInfo, bool) {
+	entry := pf.lastDebugPath.Load()
+	if entry == nil {
+		return PathDebugInfo{}, false
+	}
+
+	pathCopy := make(Path, len(entry.path))
+	copy(pathCopy, entry.path)
+
+	return PathDebugInfo{
+		From:      entry.from,
+		To:        entry.to,
+		Path:      pathCopy,
+		Timestamp: entry.timestamp,
+	}, true
+}
+
+func (pf *PathFinder) ClearDebugPath() {
+	pf.lastDebugPath.Store(nil)
 }
 
 func (pf *PathFinder) mergeGrids(to data.Position, canTeleport bool) (*game.Grid, error) {

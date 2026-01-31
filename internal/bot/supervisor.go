@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hectorgimenez/koolo/internal/config"
 	ct "github.com/hectorgimenez/koolo/internal/context"
+	"github.com/hectorgimenez/koolo/internal/debug/debugoverlay"
 	"github.com/hectorgimenez/koolo/internal/event"
 	"github.com/hectorgimenez/koolo/internal/game"
 	"github.com/hectorgimenez/koolo/internal/run"
@@ -30,10 +32,12 @@ type Supervisor interface {
 }
 
 type baseSupervisor struct {
-	bot          *Bot
-	name         string
-	statsHandler *StatsHandler
-	cancelFn     context.CancelFunc
+	bot                 *Bot
+	name                string
+	statsHandler        *StatsHandler
+	cancelFn            context.CancelFunc
+	debugOverlayMu      sync.Mutex
+	debugOverlayRunning bool
 }
 
 func newBaseSupervisor(
@@ -46,6 +50,47 @@ func newBaseSupervisor(
 		name:         name,
 		statsHandler: statsHandler,
 	}, nil
+}
+
+func (s *baseSupervisor) startDebugOverlay(ctx context.Context) {
+	s.debugOverlayMu.Lock()
+	if s.debugOverlayRunning {
+		s.debugOverlayMu.Unlock()
+		return
+	}
+	s.debugOverlayRunning = true
+	s.debugOverlayMu.Unlock()
+
+	go func() {
+		defer func() {
+			s.debugOverlayMu.Lock()
+			s.debugOverlayRunning = false
+			s.debugOverlayMu.Unlock()
+		}()
+
+		s.bot.ctx.AttachRoutine(ct.PriorityBackground)
+		defer s.bot.ctx.Detach()
+
+		status := ct.Get()
+		if status == nil {
+			s.bot.ctx.Logger.Warn("Unable to start debug overlay: missing supervisor status")
+			return
+		}
+
+		overlay := debugoverlay.Instance(status)
+		if overlay == nil {
+			s.bot.ctx.Logger.Warn("Unable to start debug overlay: missing overlay instance")
+			return
+		}
+
+		if err := overlay.Start(); err != nil {
+			status.Logger.Error("Failed to start debug overlay", slog.Any("error", err))
+			return
+		}
+
+		<-ctx.Done()
+		overlay.Stop()
+	}()
 }
 
 func (s *baseSupervisor) Name() string {

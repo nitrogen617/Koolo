@@ -75,6 +75,7 @@ type CharacterSettings struct {
 	Supervisor              string
 	CloneSource             string
 	Config                  *config.CharacterCfg
+	DebugOverlayEnabled     bool
 	SkillOptions            []SkillOption
 	SkillPrereqs            map[string][]string
 	Saved                   bool

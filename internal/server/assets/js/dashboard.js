@@ -146,6 +146,9 @@ function createCharacterCard(key) {
                       <button class="btn btn-outline attach-btn" onclick="showAttachPopup('${key}')" style="display:none;" title="Attach">
                           <i class="bi bi-link-45deg"></i>
                       </button>
+                      <button class="btn btn-outline toggle-overlay-btn" data-character="${key}" style="display:none;" title="Toggle debug overlay">
+                          <i class="bi bi-bounding-box-circles btn-icon"></i>
+                      </button>
                       <button class="toggle-details" title="Toggle Details">
                           <i class="bi bi-chevron-down"></i>
                       </button>
@@ -216,6 +219,7 @@ function setupEventListeners(card, key) {
   const stopBtn = card.querySelector(".stop");
   const resetMuleBtn = card.querySelector(".reset-muling-btn");
   const autoStartCheckbox = card.querySelector(".autostart-checkbox");
+  const overlayToggleBtn = card.querySelector(".toggle-overlay-btn");
   if (resetMuleBtn) {
     resetMuleBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -296,6 +300,34 @@ function setupEventListeners(card, key) {
     });
   }
 
+  if (overlayToggleBtn) {
+    overlayToggleBtn.addEventListener("click", function (event) {
+      event.stopPropagation();
+      if (overlayToggleBtn.disabled) {
+        return;
+      }
+      const supervisorName = encodeURIComponent(key);
+      overlayToggleBtn.classList.add("is-loading");
+      fetch(`/toggleOverlay?characterName=${supervisorName}`)
+        .then((response) => {
+          if (!response.ok) {
+            return response.text().then((text) => {
+              throw new Error(text || "Failed to toggle overlay");
+            });
+          }
+          return response.json();
+        })
+        .then((data) => updateDashboard(data))
+        .catch((error) => {
+          console.error("Error toggling overlay:", error);
+          alert(error.message || "Unable to toggle the debug overlay.");
+        })
+        .finally(() => {
+          overlayToggleBtn.classList.remove("is-loading");
+        });
+    });
+  }
+
   const manualPlayBtn = card.querySelector(".manual-play");
   if (manualPlayBtn) {
     manualPlayBtn.addEventListener("click", function () {
@@ -338,6 +370,7 @@ function updateCharacterCard(card, key, value, dropCount, schedulerInfo) {
   const attachBtn = card.querySelector(".attach-btn");
   const manualPlayBtn = card.querySelector(".manual-play");
   const companionJoinBtn = card.querySelector(".companion-join-btn");
+  const overlayToggleBtn = card.querySelector(".toggle-overlay-btn");
   const statusDetails = card.querySelector(".status-details");
   const statusBadge = statusDetails.querySelector(".status-badge");
   const statusIndicator = card.querySelector(".status-indicator");
@@ -353,6 +386,11 @@ function updateCharacterCard(card, key, value, dropCount, schedulerInfo) {
 
   if (startPauseBtn && stopBtn && attachBtn && manualPlayBtn) {
     updateButtons(startPauseBtn, stopBtn, attachBtn, manualPlayBtn, value.SupervisorStatus, value.manualModeActive);
+  }
+
+  if (overlayToggleBtn) {
+    const overlayInfo = value.DebugOverlay || value.debugOverlay || null;
+    updateOverlayButton(overlayToggleBtn, overlayInfo, value.SupervisorStatus);
   }
 
   // Update companion join button visibility
@@ -663,6 +701,29 @@ function updateButtons(startPauseBtn, stopBtn, attachBtn, manualPlayBtn, status,
     attachBtn.style.display = "flex";
     manualPlayBtn.style.display = "flex"; // Show manual button when not running
   }
+}
+
+function updateOverlayButton(button, overlayInfo, supervisorStatus) {
+  if (!overlayInfo || !overlayInfo.enabled) {
+    button.style.display = "none";
+    return;
+  }
+
+  button.style.display = "inline-flex";
+  const isRunning =
+    supervisorStatus === "In game" ||
+    supervisorStatus === "Paused" ||
+    supervisorStatus === "Starting";
+  button.disabled = !isRunning;
+
+  const overlayActive = !!overlayInfo.running;
+  button.title = overlayActive
+    ? "Hide debug overlay"
+    : isRunning
+      ? "Show debug overlay"
+      : "debug overlay available when the supervisor is running";
+  button.setAttribute("aria-pressed", overlayActive ? "true" : "false");
+  button.classList.toggle("overlay-active", overlayActive);
 }
 
 function updateStats(card, key, games, dropCount) {

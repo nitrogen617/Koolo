@@ -159,6 +159,10 @@ func (s *SinglePlayerSupervisor) Start() error {
 		return err
 	}
 
+	if s.bot.ctx.CharacterCfg.EnableDebugOverlay {
+		s.startDebugOverlay(ctx)
+	}
+
 	// MANUAL MODE: Early exit - handle before normal game loop
 	if s.bot.ctx.ManualModeActive {
 		s.bot.ctx.Logger.Info("Manual mode: reaching character selection...")
@@ -184,11 +188,29 @@ func (s *SinglePlayerSupervisor) Start() error {
 
 		s.bot.ctx.Logger.Info("Manual mode: initialization complete")
 
+		overlayTicker := time.NewTicker(time.Second)
+		defer overlayTicker.Stop()
+		mapFetched := false
+
 		// Keep process alive until stopped
 		for {
 			select {
 			case <-ctx.Done():
 				return nil
+			case <-overlayTicker.C:
+				s.bot.ctx.RefreshGameData()
+				if !s.bot.ctx.Data.IsIngame {
+					mapFetched = false
+					continue
+				}
+				if !mapFetched {
+					if err := s.bot.ctx.GameReader.FetchMapData(); err != nil {
+						s.bot.ctx.Logger.Warn("Manual mode: failed to fetch map data", slog.Any("error", err))
+					} else {
+						mapFetched = true
+						s.bot.ctx.RefreshGameData()
+					}
+				}
 			default:
 				utils.Sleep(1000)
 			}
