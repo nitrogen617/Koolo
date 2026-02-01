@@ -788,7 +788,7 @@ func (s *HttpServer) getStatusData() IndexData {
 			if stats.UI.Class == "" {
 				stats.UI.Class = cfg.Character.Class
 			}
-			overlayEnabled := config.Version == "dev" && cfg.EnableDebugOverlay
+			overlayEnabled := config.Version == "dev" && config.Koolo.Debug.Overlay && cfg.EnableDebugOverlay
 			stats.DebugOverlay.Enabled = overlayEnabled
 			if overlayEnabled {
 				if supCtx := s.manager.GetContext(supervisorName); supCtx != nil {

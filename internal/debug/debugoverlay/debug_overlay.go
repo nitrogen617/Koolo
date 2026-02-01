@@ -16,10 +16,12 @@ import (
 	"time"
 
 	"github.com/hectorgimenez/d2go/pkg/data"
+	"github.com/hectorgimenez/d2go/pkg/data/item"
 	botctx "github.com/hectorgimenez/koolo/internal/context"
 	"github.com/hectorgimenez/koolo/internal/game"
 	"github.com/hectorgimenez/koolo/internal/pather"
 	"github.com/inkeliz/gowebview"
+	"github.com/lxn/win"
 )
 
 //go:embed assets/*
@@ -219,27 +221,12 @@ type overlayPayload struct {
 	PathLen    int            `json:"pathLen"`
 	LastAction string         `json:"lastAction"`
 	LastStep   string         `json:"lastStep"`
-	Mode       string         `json:"mode"`
-	Bounds     *overlayBounds `json:"bounds,omitempty"`
-	PlayerPos  overlayCoord   `json:"playerPos"`
 }
 
 type overlayTile struct {
 	X    float64 `json:"x"`
 	Y    float64 `json:"y"`
 	Type int     `json:"type"`
-}
-
-type overlayBounds struct {
-	MinX int `json:"minX"`
-	MaxX int `json:"maxX"`
-	MinY int `json:"minY"`
-	MaxY int `json:"maxY"`
-}
-
-type overlayCoord struct {
-	X int `json:"x"`
-	Y int `json:"y"`
 }
 
 func NewDebugOverlay(ctx *botctx.Status) *DebugOverlay {
@@ -375,8 +362,6 @@ func (po *DebugOverlay) collectData() overlayPayload {
 	po.ensureMapData(dataSnapshot)
 
 	player := dataSnapshot.PlayerUnit.Position
-	payload.PlayerPos = overlayCoord{X: player.X, Y: player.Y}
-	fullMap := false
 
 	objects := make([]overlayPoint, 0, len(dataSnapshot.Objects))
 	doors := make([]overlayPoint, 0, 32)
@@ -384,15 +369,15 @@ func (po *DebugOverlay) collectData() overlayPayload {
 	for _, obj := range dataSnapshot.Objects {
 		dx := obj.Position.X - player.X
 		dy := obj.Position.Y - player.Y
-		if !fullMap && !withinRange(dx, dy) {
+		if !withinRange(dx, dy) {
 			continue
 		}
 
 		if obj.IsDoor() {
 			if len(doors) < 80 {
 				doors = append(doors, overlayPoint{
-					X:    float64(po.worldX(obj.Position, player, fullMap)),
-					Y:    float64(po.worldY(obj.Position, player, fullMap)),
+					X:    relX(obj.Position, player),
+					Y:    relY(obj.Position, player),
 					Size: 4,
 					Kind: "Door",
 				})
@@ -406,8 +391,8 @@ func (po *DebugOverlay) collectData() overlayPayload {
 					kind = "RedPortal"
 				}
 				portals = append(portals, overlayPoint{
-					X:    float64(po.worldX(obj.Position, player, fullMap)),
-					Y:    float64(po.worldY(obj.Position, player, fullMap)),
+					X:    relX(obj.Position, player),
+					Y:    relY(obj.Position, player),
 					Size: 4.5,
 					Kind: kind,
 				})
@@ -416,8 +401,8 @@ func (po *DebugOverlay) collectData() overlayPayload {
 		}
 
 		objects = append(objects, overlayPoint{
-			X:    float64(po.worldX(obj.Position, player, fullMap)),
-			Y:    float64(po.worldY(obj.Position, player, fullMap)),
+			X:    relX(obj.Position, player),
+			Y:    relY(obj.Position, player),
 			Size: 2,
 			Kind: fmt.Sprintf("%v", obj.Name),
 		})
@@ -431,12 +416,12 @@ func (po *DebugOverlay) collectData() overlayPayload {
 	for _, ent := range dataSnapshot.Entrances {
 		dx := ent.Position.X - player.X
 		dy := ent.Position.Y - player.Y
-		if !fullMap && !withinRange(dx, dy) {
+		if !withinRange(dx, dy) {
 			continue
 		}
 		entrances = append(entrances, overlayPoint{
-			X:    float64(po.worldX(ent.Position, player, fullMap)),
-			Y:    float64(po.worldY(ent.Position, player, fullMap)),
+			X:    relX(ent.Position, player),
+			Y:    relY(ent.Position, player),
 			Size: 4,
 			Kind: "Entrance",
 		})
@@ -453,12 +438,12 @@ func (po *DebugOverlay) collectData() overlayPayload {
 		}
 		dx := lvl.Position.X - player.X
 		dy := lvl.Position.Y - player.Y
-		if !fullMap && !withinRange(dx, dy) {
+		if !withinRange(dx, dy) {
 			continue
 		}
 		entrances = append(entrances, overlayPoint{
-			X:    float64(po.worldX(lvl.Position, player, fullMap)),
-			Y:    float64(po.worldY(lvl.Position, player, fullMap)),
+			X:    relX(lvl.Position, player),
+			Y:    relY(lvl.Position, player),
 			Size: 4,
 			Kind: "Entrance",
 		})
@@ -471,7 +456,7 @@ func (po *DebugOverlay) collectData() overlayPayload {
 	for _, monster := range dataSnapshot.Monsters.Enemies() {
 		dx := monster.Position.X - player.X
 		dy := monster.Position.Y - player.Y
-		if !fullMap && !withinRange(dx, dy) {
+		if !withinRange(dx, dy) {
 			continue
 		}
 
@@ -481,8 +466,8 @@ func (po *DebugOverlay) collectData() overlayPayload {
 		}
 
 		monsters = append(monsters, overlayPoint{
-			X:    float64(po.worldX(monster.Position, player, fullMap)),
-			Y:    float64(po.worldY(monster.Position, player, fullMap)),
+			X:    relX(monster.Position, player),
+			Y:    relY(monster.Position, player),
 			Size: size,
 			Kind: string(monster.Type),
 		})
@@ -492,15 +477,14 @@ func (po *DebugOverlay) collectData() overlayPayload {
 		}
 	}
 
-	tiles, bounds := po.collectTiles(dataSnapshot, player, fullMap)
+	tiles := po.collectTiles(dataSnapshot, player)
 	payload.Tiles = tiles
-	payload.Path = po.collectPath(player, fullMap)
+	payload.Path = po.collectPath(player)
 	payload.Objects = objects
 	payload.Doors = doors
 	payload.Portals = portals
 	payload.Entrances = entrances
 	payload.Monsters = monsters
-	payload.Bounds = bounds
 	meta := fmt.Sprintf("%s | tiles:%d objects:%d monsters:%d", dataSnapshot.PlayerUnit.Area.Area().Name, len(tiles), len(objects), len(monsters))
 	if po.ctx != nil && po.ctx.GameReader != nil {
 		if seed := po.ctx.GameReader.MapSeed(); seed > 0 {
@@ -595,37 +579,21 @@ func (po *DebugOverlay) ensureMapData(dataSnapshot *game.Data) {
 	}
 }
 
-func (po *DebugOverlay) worldX(pos data.Position, player data.Position, full bool) float64 {
-	if full {
-		return float64(pos.X)
-	}
-	return float64(pos.X - player.X)
-}
-
-func (po *DebugOverlay) worldY(pos data.Position, player data.Position, full bool) float64 {
-	if full {
-		return float64(pos.Y)
-	}
-	return float64(pos.Y - player.Y)
-}
-
-func (po *DebugOverlay) collectTiles(dataSnapshot *game.Data, player data.Position, full bool) ([]overlayTile, *overlayBounds) {
+func (po *DebugOverlay) collectTiles(dataSnapshot *game.Data, player data.Position) []overlayTile {
 	grid := dataSnapshot.AreaData.Grid
 	if grid == nil {
-		return nil, nil
+		return nil
 	}
 
 	startX := grid.OffsetX
 	endX := grid.OffsetX + grid.Width - 1
 	startY := grid.OffsetY
 	endY := grid.OffsetY + grid.Height - 1
-	if !full {
-		rangeSize := int(overlayRange)
-		startX = max(player.X-rangeSize, grid.OffsetX)
-		endX = min(player.X+rangeSize, grid.OffsetX+grid.Width-1)
-		startY = max(player.Y-rangeSize, grid.OffsetY)
-		endY = min(player.Y+rangeSize, grid.OffsetY+grid.Height-1)
-	}
+	rangeSize := int(overlayRange)
+	startX = max(player.X-rangeSize, grid.OffsetX)
+	endX = min(player.X+rangeSize, grid.OffsetX+grid.Width-1)
+	startY = max(player.Y-rangeSize, grid.OffsetY)
+	endY = min(player.Y+rangeSize, grid.OffsetY+grid.Height-1)
 	tiles := make([]overlayTile, 0, (endX-startX+1)*(endY-startY+1))
 
 	for worldY := startY; worldY <= endY; worldY++ {
@@ -644,25 +612,17 @@ func (po *DebugOverlay) collectTiles(dataSnapshot *game.Data, player data.Positi
 				continue
 			}
 			tiles = append(tiles, overlayTile{
-				X:    float64(po.worldX(data.Position{X: worldX, Y: worldY}, player, full)),
-				Y:    float64(po.worldY(data.Position{X: worldX, Y: worldY}, player, full)),
+				X:    relX(data.Position{X: worldX, Y: worldY}, player),
+				Y:    relY(data.Position{X: worldX, Y: worldY}, player),
 				Type: int(cell),
 			})
 		}
 	}
 
-	if !full {
-		return tiles, nil
-	}
-	return tiles, &overlayBounds{
-		MinX: startX,
-		MaxX: endX,
-		MinY: startY,
-		MaxY: endY,
-	}
+	return tiles
 }
 
-func (po *DebugOverlay) collectPath(player data.Position, full bool) []overlayPoint {
+func (po *DebugOverlay) collectPath(player data.Position) []overlayPoint {
 	if po.ctx.PathFinder == nil {
 		return nil
 	}
@@ -676,12 +636,12 @@ func (po *DebugOverlay) collectPath(player data.Position, full bool) []overlayPo
 	for _, node := range lastPath.Path {
 		dx := node.X - player.X
 		dy := node.Y - player.Y
-		if !full && !withinRange(dx, dy) {
+		if !withinRange(dx, dy) {
 			continue
 		}
 		points = append(points, overlayPoint{
-			X: float64(po.worldX(node, player, full)),
-			Y: float64(po.worldY(node, player, full)),
+			X: relX(node, player),
+			Y: relY(node, player),
 		})
 	}
 
@@ -704,4 +664,464 @@ func max(a, b int) int {
 
 func withinRange(dx, dy int) bool {
 	return math.Abs(float64(dx)) <= overlayRange && math.Abs(float64(dy)) <= overlayRange
+}
+
+func relX(pos data.Position, player data.Position) float64 {
+	return float64(pos.X - player.X)
+}
+
+func relY(pos data.Position, player data.Position) float64 {
+	return float64(pos.Y - player.Y)
+}
+
+type debugOverlay struct {
+	stashTabHint int
+}
+
+func (o *debugOverlay) Inspect(gd *game.MemoryReader, gdData *game.Data) (string, string) {
+	if gd == nil || gdData == nil {
+		return "", ""
+	}
+
+	gd.UpdateWindowPositionData()
+
+	text := "UnitID: -"
+	if gdData.HoverData.IsHovered {
+		text = fmt.Sprintf("UnitID: %d", gdData.HoverData.UnitID)
+		if pos, label, ok := o.hoveredPosition(gdData); ok {
+			text = fmt.Sprintf("%s %s: %d,%d", text, label, pos.X, pos.Y)
+		}
+	} else if gdData.OpenMenus.Inventory || gdData.OpenMenus.Stash || gdData.OpenMenus.Cube {
+		var pt win.POINT
+		if win.GetCursorPos(&pt) {
+			cursorX := int(pt.X) - gd.WindowLeftX
+			cursorY := int(pt.Y) - gd.WindowTopY
+			if cursorX >= 0 && cursorY >= 0 && cursorX <= gd.GameAreaSizeX && cursorY <= gd.GameAreaSizeY {
+				if gdData.OpenMenus.Stash {
+					o.updateStashTabHint(gdData, cursorX, cursorY)
+				}
+				if itm, ok := o.findUIItemAtCursor(gdData, cursorX, cursorY); ok {
+					name := itm.IdentifiedName
+					if name == "" {
+						name = string(itm.Name)
+					}
+					if itm.Location.LocationType == item.LocationEquipped || itm.Location.LocationType == item.LocationMercenary {
+						text = fmt.Sprintf("UnitID: %d Slot: %s Name: %s", itm.UnitID, itm.Location.BodyLocation, name)
+					} else {
+						text = fmt.Sprintf("UnitID: %d Cell: %d,%d Name: %s", itm.UnitID, itm.Position.X, itm.Position.Y, name)
+					}
+				}
+			}
+		}
+	}
+
+	return text, ""
+}
+
+const (
+	overlayItemBoxSize        = 33
+	overlayItemBoxSizeClassic = 35
+
+	overlayInventoryCols = 10
+	overlayInventoryRows = 4
+	overlayStashCols     = 10
+	overlayStashRows     = 10
+	overlayCubeCols      = 3
+	overlayCubeRows      = 4
+
+	overlayInventoryTopLeftX        = 846
+	overlayInventoryTopLeftXClassic = 663
+	overlayInventoryTopLeftY        = 369
+	overlayInventoryTopLeftYClassic = 379
+
+	overlayVendorWindowTopLeftX        = 109
+	overlayVendorWindowTopLeftXClassic = 275
+	overlayVendorWindowTopLeftY        = 147
+	overlayVendorWindowTopLeftYClassic = 149
+
+	overlayCubeWindowTopLeftX        = 222
+	overlayCubeWindowTopLeftXClassic = 398
+	overlayCubeWindowTopLeftY        = 247
+	overlayCubeWindowTopLeftYClassic = 239
+
+	overlayStashTabStartX        = 107
+	overlayStashTabStartXClassic = 258
+	overlayStashTabStartY        = 128
+	overlayStashTabStartYClassic = 84
+	overlayStashTabSize          = 55
+	overlayStashTabSizeClassic   = 96
+
+	overlayEquipHeadX = 1005
+	overlayEquipHeadY = 160
+	overlayEquipNeckX = 1070
+	overlayEquipNeckY = 205
+	overlayEquipLArmX = 885
+	overlayEquipLArmY = 215
+	overlayEquipRArmX = 1135
+	overlayEquipRArmY = 215
+	overlayEquipTorsX = 1005
+	overlayEquipTorsY = 260
+	overlayEquipBeltX = 1005
+	overlayEquipBeltY = 340
+	overlayEquipGlovX = 885
+	overlayEquipGlovY = 325
+	overlayEquipFeetX = 1135
+	overlayEquipFeetY = 325
+	overlayEquipLRinX = 945
+	overlayEquipLRinY = 340
+	overlayEquipRRinX = 1070
+	overlayEquipRRinY = 340
+
+	overlayEquipHeadClassicX = 833
+	overlayEquipHeadClassicY = 110
+	overlayEquipNeckClassicX = 905
+	overlayEquipNeckClassicY = 130
+	overlayEquipLArmClassicX = 700
+	overlayEquipLArmClassicY = 190
+	overlayEquipRArmClassicX = 975
+	overlayEquipRArmClassicY = 190
+	overlayEquipTorsClassicX = 833
+	overlayEquipTorsClassicY = 210
+	overlayEquipBeltClassicX = 833
+	overlayEquipBeltClassicY = 300
+	overlayEquipGlovClassicX = 700
+	overlayEquipGlovClassicY = 315
+	overlayEquipFeetClassicX = 975
+	overlayEquipFeetClassicY = 315
+	overlayEquipLRinClassicX = 770
+	overlayEquipLRinClassicY = 300
+	overlayEquipRRinClassicX = 905
+	overlayEquipRRinClassicY = 300
+
+	overlayEquipMercHeadX = 548
+	overlayEquipMercHeadY = 166
+	overlayEquipMercLArmX = 463
+	overlayEquipMercLArmY = 293
+	overlayEquipMercTorsX = 548
+	overlayEquipMercTorsY = 293
+
+	overlayEquipMercHeadClassicX = 450
+	overlayEquipMercHeadClassicY = 115
+	overlayEquipMercLArmClassicX = 380
+	overlayEquipMercLArmClassicY = 248
+	overlayEquipMercTorsClassicX = 450
+	overlayEquipMercTorsClassicY = 248
+)
+
+type overlayPanel int
+
+const (
+	panelNone overlayPanel = iota
+	panelInventory
+	panelStash
+	panelCube
+)
+
+type overlayRect struct {
+	left   int
+	top    int
+	right  int
+	bottom int
+}
+
+func rectForGrid(left, top, cols, rows, boxSize int) overlayRect {
+	return overlayRect{
+		left:   left,
+		top:    top,
+		right:  left + cols*boxSize,
+		bottom: top + rows*boxSize,
+	}
+}
+
+func pointInRect(x, y int, r overlayRect) bool {
+	return x >= r.left && x < r.right && y >= r.top && y < r.bottom
+}
+
+func (o *debugOverlay) findUIItemAtCursor(gdData *game.Data, cursorX, cursorY int) (data.Item, bool) {
+	if gdData.OpenMenus.Inventory || gdData.OpenMenus.Character || gdData.OpenMenus.MercInventory {
+		locs := []item.LocationType{item.LocationEquipped}
+		if gdData.OpenMenus.MercInventory {
+			locs = append(locs, item.LocationMercenary)
+		}
+		items := gdData.Inventory.ByLocation(locs...)
+		for _, itm := range items {
+			if left, top, right, bottom, ok := overlayEquippedRect(gdData.LegacyGraphics, itm); ok {
+				if cursorX >= left && cursorX < right && cursorY >= top && cursorY < bottom {
+					return itm, true
+				}
+			}
+		}
+	}
+
+	panel := overlayPanelAtCursor(gdData, cursorX, cursorY)
+	if panel == panelNone {
+		return data.Item{}, false
+	}
+
+	locations := []item.LocationType{}
+	switch panel {
+	case panelCube:
+		locations = append(locations, item.LocationCube)
+	case panelStash:
+		locations = append(locations, item.LocationStash, item.LocationSharedStash)
+	case panelInventory:
+		locations = append(locations, item.LocationInventory)
+	}
+
+	items := gdData.Inventory.ByLocation(locations...)
+	for _, itm := range items {
+		if panel == panelStash {
+			if !o.itemMatchesStashTabHint(itm) {
+				continue
+			}
+		}
+		left, top, right, bottom := overlayItemRect(gdData.LegacyGraphics, itm)
+		if cursorX >= left && cursorX < right && cursorY >= top && cursorY < bottom {
+			return itm, true
+		}
+	}
+
+	return data.Item{}, false
+}
+
+func (o *debugOverlay) itemMatchesStashTabHint(itm data.Item) bool {
+	if o.stashTabHint == 0 {
+		return true
+	}
+	if o.stashTabHint == 1 {
+		return itm.Location.LocationType == item.LocationStash
+	}
+	if itm.Location.LocationType != item.LocationSharedStash {
+		return false
+	}
+	return itm.Location.Page == o.stashTabHint-1
+}
+
+func overlayPanelAtCursor(gdData *game.Data, cursorX, cursorY int) overlayPanel {
+	boxSize := overlayItemBoxSize
+	invLeft := overlayInventoryTopLeftX
+	invTop := overlayInventoryTopLeftY
+	stashLeft := overlayVendorWindowTopLeftX
+	stashTop := overlayVendorWindowTopLeftY
+	cubeLeft := overlayCubeWindowTopLeftX
+	cubeTop := overlayCubeWindowTopLeftY
+	if gdData.LegacyGraphics {
+		boxSize = overlayItemBoxSizeClassic
+		invLeft = overlayInventoryTopLeftXClassic
+		invTop = overlayInventoryTopLeftYClassic
+		stashLeft = overlayVendorWindowTopLeftXClassic
+		stashTop = overlayVendorWindowTopLeftYClassic
+		cubeLeft = overlayCubeWindowTopLeftXClassic
+		cubeTop = overlayCubeWindowTopLeftYClassic
+	}
+
+	if gdData.OpenMenus.Cube {
+		if pointInRect(cursorX, cursorY, rectForGrid(cubeLeft, cubeTop, overlayCubeCols, overlayCubeRows, boxSize)) {
+			return panelCube
+		}
+	}
+	if gdData.OpenMenus.Stash {
+		if pointInRect(cursorX, cursorY, rectForGrid(stashLeft, stashTop, overlayStashCols, overlayStashRows, boxSize)) {
+			return panelStash
+		}
+	}
+	if gdData.OpenMenus.Inventory {
+		if pointInRect(cursorX, cursorY, rectForGrid(invLeft, invTop, overlayInventoryCols, overlayInventoryRows, boxSize)) {
+			return panelInventory
+		}
+	}
+
+	return panelNone
+}
+
+func (o *debugOverlay) updateStashTabHint(gdData *game.Data, cursorX, cursorY int) {
+	if uint16(win.GetKeyState(win.VK_LBUTTON))&0x8000 == 0 {
+		return
+	}
+
+	startX := overlayStashTabStartX
+	startY := overlayStashTabStartY
+	tabSize := overlayStashTabSize
+	if gdData.LegacyGraphics {
+		startX = overlayStashTabStartXClassic
+		startY = overlayStashTabStartYClassic
+		tabSize = overlayStashTabSizeClassic
+	}
+
+	tabRect := overlayRect{
+		left:   startX,
+		top:    startY,
+		right:  startX + tabSize*4,
+		bottom: startY + tabSize,
+	}
+	if !pointInRect(cursorX, cursorY, tabRect) {
+		return
+	}
+
+	tabIndex := (cursorX-startX)/tabSize + 1
+	if tabIndex < 1 || tabIndex > 4 {
+		return
+	}
+	o.stashTabHint = tabIndex
+}
+
+func overlayItemRect(legacy bool, itm data.Item) (left, top, right, bottom int) {
+	boxSize := overlayItemBoxSize
+	invLeft := overlayInventoryTopLeftX
+	invTop := overlayInventoryTopLeftY
+	vendorLeft := overlayVendorWindowTopLeftX
+	vendorTop := overlayVendorWindowTopLeftY
+	cubeLeft := overlayCubeWindowTopLeftX
+	cubeTop := overlayCubeWindowTopLeftY
+	if legacy {
+		boxSize = overlayItemBoxSizeClassic
+		invLeft = overlayInventoryTopLeftXClassic
+		invTop = overlayInventoryTopLeftYClassic
+		vendorLeft = overlayVendorWindowTopLeftXClassic
+		vendorTop = overlayVendorWindowTopLeftYClassic
+		cubeLeft = overlayCubeWindowTopLeftXClassic
+		cubeTop = overlayCubeWindowTopLeftYClassic
+	}
+
+	baseX := invLeft
+	baseY := invTop
+	switch itm.Location.LocationType {
+	case item.LocationStash, item.LocationSharedStash, item.LocationVendor:
+		baseX = vendorLeft
+		baseY = vendorTop
+	case item.LocationCube:
+		baseX = cubeLeft
+		baseY = cubeTop
+	}
+
+	left = baseX + itm.Position.X*boxSize
+	top = baseY + itm.Position.Y*boxSize
+	width := itm.Desc().InventoryWidth * boxSize
+	height := itm.Desc().InventoryHeight * boxSize
+	right = left + width
+	bottom = top + height
+	return left, top, right, bottom
+}
+
+func overlayEquippedRect(legacy bool, itm data.Item) (left, top, right, bottom int, ok bool) {
+	merc := itm.Location.LocationType == item.LocationMercenary
+	cx, cy, coordOK := overlayEquipCoords(legacy, itm.Location.BodyLocation, merc)
+	if !coordOK {
+		return 0, 0, 0, 0, false
+	}
+
+	boxSize := overlayItemBoxSize
+	if legacy {
+		boxSize = overlayItemBoxSizeClassic
+	}
+
+	width := itm.Desc().InventoryWidth * boxSize
+	height := itm.Desc().InventoryHeight * boxSize
+	left = cx - width/2
+	top = cy - height/2
+	right = left + width
+	bottom = top + height
+	return left, top, right, bottom, true
+}
+
+func overlayEquipCoords(legacy bool, bodyLoc item.LocationType, merc bool) (int, int, bool) {
+	if merc {
+		if legacy {
+			switch bodyLoc {
+			case item.LocHead:
+				return overlayEquipMercHeadClassicX, overlayEquipMercHeadClassicY, true
+			case item.LocLeftArm:
+				return overlayEquipMercLArmClassicX, overlayEquipMercLArmClassicY, true
+			case item.LocTorso:
+				return overlayEquipMercTorsClassicX, overlayEquipMercTorsClassicY, true
+			}
+		} else {
+			switch bodyLoc {
+			case item.LocHead:
+				return overlayEquipMercHeadX, overlayEquipMercHeadY, true
+			case item.LocLeftArm:
+				return overlayEquipMercLArmX, overlayEquipMercLArmY, true
+			case item.LocTorso:
+				return overlayEquipMercTorsX, overlayEquipMercTorsY, true
+			}
+		}
+		return 0, 0, false
+	}
+
+	if legacy {
+		switch bodyLoc {
+		case item.LocHead:
+			return overlayEquipHeadClassicX, overlayEquipHeadClassicY, true
+		case item.LocNeck:
+			return overlayEquipNeckClassicX, overlayEquipNeckClassicY, true
+		case item.LocLeftArm:
+			return overlayEquipLArmClassicX, overlayEquipLArmClassicY, true
+		case item.LocRightArm:
+			return overlayEquipRArmClassicX, overlayEquipRArmClassicY, true
+		case item.LocTorso:
+			return overlayEquipTorsClassicX, overlayEquipTorsClassicY, true
+		case item.LocBelt:
+			return overlayEquipBeltClassicX, overlayEquipBeltClassicY, true
+		case item.LocGloves:
+			return overlayEquipGlovClassicX, overlayEquipGlovClassicY, true
+		case item.LocFeet:
+			return overlayEquipFeetClassicX, overlayEquipFeetClassicY, true
+		case item.LocLeftRing:
+			return overlayEquipLRinClassicX, overlayEquipLRinClassicY, true
+		case item.LocRightRing:
+			return overlayEquipRRinClassicX, overlayEquipRRinClassicY, true
+		}
+		return 0, 0, false
+	}
+
+	switch bodyLoc {
+	case item.LocHead:
+		return overlayEquipHeadX, overlayEquipHeadY, true
+	case item.LocNeck:
+		return overlayEquipNeckX, overlayEquipNeckY, true
+	case item.LocLeftArm:
+		return overlayEquipLArmX, overlayEquipLArmY, true
+	case item.LocRightArm:
+		return overlayEquipRArmX, overlayEquipRArmY, true
+	case item.LocTorso:
+		return overlayEquipTorsX, overlayEquipTorsY, true
+	case item.LocBelt:
+		return overlayEquipBeltX, overlayEquipBeltY, true
+	case item.LocGloves:
+		return overlayEquipGlovX, overlayEquipGlovY, true
+	case item.LocFeet:
+		return overlayEquipFeetX, overlayEquipFeetY, true
+	case item.LocLeftRing:
+		return overlayEquipLRinX, overlayEquipLRinY, true
+	case item.LocRightRing:
+		return overlayEquipRRinX, overlayEquipRRinY, true
+	}
+
+	return 0, 0, false
+}
+
+func (o *debugOverlay) hoveredPosition(gdData *game.Data) (data.Position, string, bool) {
+	switch gdData.HoverData.UnitType {
+	case 1:
+		if monster, ok := gdData.Monsters.FindByID(gdData.HoverData.UnitID); ok {
+			return monster.Position, "Pos", true
+		}
+	case 2:
+		if obj, ok := gdData.Objects.FindByID(gdData.HoverData.UnitID); ok {
+			return obj.Position, "Pos", true
+		}
+	case 4:
+		if itm, ok := gdData.Inventory.FindByID(gdData.HoverData.UnitID); ok {
+			if itm.Location.LocationType == item.LocationGround {
+				return itm.Position, "Pos", true
+			}
+			return itm.Position, "Cell", true
+		}
+	case 5:
+		if ent, ok := gdData.Entrances.FindByID(gdData.HoverData.UnitID); ok {
+			return ent.Position, "Pos", true
+		}
+	}
+
+	return data.Position{}, "", false
 }
