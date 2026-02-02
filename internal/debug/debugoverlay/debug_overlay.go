@@ -493,7 +493,7 @@ func (po *DebugOverlay) collectData() overlayPayload {
 	}
 	payload.Meta = meta
 	if po.hoverInspector != nil && po.ctx != nil {
-		hoverText, hoverFooter := po.hoverInspector.Inspect(po.ctx.GameReader, dataSnapshot)
+		hoverText, hoverFooter := po.hoverInspector.Inspect(po.ctx, po.ctx.GameReader, dataSnapshot)
 		payload.Hover = hoverText
 		payload.Footer = hoverFooter
 	}
@@ -675,20 +675,23 @@ func relY(pos data.Position, player data.Position) float64 {
 }
 
 type debugOverlay struct {
-	stashTabHint int
+	stashTabHint        int
+	lastContextStashTab int
 }
 
-func (o *debugOverlay) Inspect(gd *game.MemoryReader, gdData *game.Data) (string, string) {
+func (o *debugOverlay) Inspect(ctx *botctx.Status, gd *game.MemoryReader, gdData *game.Data) (string, string) {
 	if gd == nil || gdData == nil {
 		return "", ""
 	}
 
+	o.syncStashTabHint(ctx, gdData)
 	gd.UpdateWindowPositionData()
 
 	text := "UnitID: -"
 	if gdData.HoverData.IsHovered {
 		if gdData.HoverData.UnitType == 4 {
 			if itm, ok := gdData.Inventory.FindByID(gdData.HoverData.UnitID); ok {
+				o.updateStashTabHintFromItem(itm)
 				name := itm.IdentifiedName
 				if name == "" {
 					name = string(itm.Name)
@@ -709,6 +712,7 @@ func (o *debugOverlay) Inspect(gd *game.MemoryReader, gdData *game.Data) (string
 		}
 	} else if gdData.OpenMenus.Inventory || gdData.OpenMenus.Stash || gdData.OpenMenus.Cube {
 		if itm, ok := o.findHoveredItem(gdData); ok {
+			o.updateStashTabHintFromItem(itm)
 			text = formatItemHoverText(itm)
 		} else {
 			var pt win.POINT
@@ -720,6 +724,7 @@ func (o *debugOverlay) Inspect(gd *game.MemoryReader, gdData *game.Data) (string
 						o.updateStashTabHint(gdData, cursorX, cursorY)
 					}
 					if itm, ok := o.findUIItemAtCursor(gdData, cursorX, cursorY); ok {
+						o.updateStashTabHintFromItem(itm)
 						text = formatItemHoverText(itm)
 					}
 				}
@@ -849,6 +854,28 @@ func pointInRect(x, y int, r overlayRect) bool {
 	return x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
+func (o *debugOverlay) syncStashTabHint(ctx *botctx.Status, gdData *game.Data) {
+	if o == nil || gdData == nil {
+		return
+	}
+	if !gdData.OpenMenus.Stash {
+		o.stashTabHint = 0
+		return
+	}
+	if ctx == nil {
+		return
+	}
+
+	tab := int(ctx.LastStashTab.Load())
+	if tab < 1 || tab > 4 {
+		return
+	}
+	if tab != o.lastContextStashTab {
+		o.lastContextStashTab = tab
+		o.stashTabHint = tab
+	}
+}
+
 func (o *debugOverlay) findUIItemAtCursor(gdData *game.Data, cursorX, cursorY int) (data.Item, bool) {
 	if gdData.OpenMenus.Inventory || gdData.OpenMenus.Character || gdData.OpenMenus.MercInventory {
 		locs := []item.LocationType{item.LocationEquipped}
@@ -971,6 +998,20 @@ func formatItemHoverText(itm data.Item) string {
 		return fmt.Sprintf("UnitID: %d Slot: %s Name: %s", itm.UnitID, itm.Location.BodyLocation, name)
 	}
 	return fmt.Sprintf("UnitID: %d Cell: %d,%d Name: %s", itm.UnitID, itm.Position.X, itm.Position.Y, name)
+}
+
+func (o *debugOverlay) updateStashTabHintFromItem(itm data.Item) {
+	if o == nil {
+		return
+	}
+	switch itm.Location.LocationType {
+	case item.LocationStash:
+		o.stashTabHint = 1
+	case item.LocationSharedStash:
+		if itm.Location.Page >= 1 && itm.Location.Page <= 3 {
+			o.stashTabHint = itm.Location.Page + 1
+		}
+	}
 }
 
 func overlayPanelAtCursor(gdData *game.Data, cursorX, cursorY int) overlayPanel {

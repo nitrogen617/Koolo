@@ -69,6 +69,7 @@ type Context struct {
 	LastPortalTick            time.Time     // NEW FIELD: Tracks last portal creation for spam prevention
 	IsBossEquipmentActive     bool          // flag for barb leveling
 	Drop                      *drop.Manager // Drop: Per-supervisor Drop manager
+	LastStashTab              atomic.Int32  // Last stash tab requested via automation (1-4).
 	IsAllocatingStatsOrSkills atomic.Bool   // Prevents stuck detection during stat/skill allocation
 }
 

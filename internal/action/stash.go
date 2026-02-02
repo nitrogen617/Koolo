@@ -587,6 +587,9 @@ func SwitchStashTab(tab int) {
 
 	ctx := context.Get()
 	ctx.SetLastStep("switchTab")
+	if tab >= 1 && tab <= 4 {
+		ctx.LastStashTab.Store(int32(tab))
+	}
 
 	if ctx.GameReader.LegacyGraphics() {
 		x := ui.SwitchStashTabBtnXClassic
